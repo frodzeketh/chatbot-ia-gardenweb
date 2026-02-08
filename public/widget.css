@@ -118,17 +118,17 @@ html, body {
 .header-avatar {
   width: 36px;
   height: 36px;
-  background: var(--primary-light);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--primary);
+  overflow: hidden;
 }
 
-.header-avatar svg {
-  width: 20px;
-  height: 20px;
+.header-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .header-title {
