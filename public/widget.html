@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chatbot Widget</title>
+  <link rel="stylesheet" href="widget.css">
+</head>
+<body>
+  <div id="chatbot-container" class="chatbot-container">
+    <!-- Botón flotante -->
+    <button id="chatbot-toggle" class="chatbot-toggle" aria-label="Abrir asistente">
+      <img src="logo-crop-huerto.png" alt="Chat" class="toggle-logo">
+    </button>
+
+    <!-- Ventana del chat -->
+    <div id="chatbot-window" class="chatbot-window">
+      <!-- Header -->
+      <div class="chatbot-header">
+        <div class="header-left">
+          <div class="header-avatar">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/>
+            </svg>
+          </div>
+          <span class="header-title" id="bot-name">Huerto IA</span>
+        </div>
+        <div class="header-right">
+          <button class="header-btn" id="close-chat" title="Cerrar chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Mensajes -->
+      <div class="chatbot-messages" id="chatbot-messages">
+        <div class="message bot-message welcome-message" id="welcome-message">
+          <div class="message-bubble">
+            <p>¡Hola! <span class="wave">👋</span></p>
+            <p>¿En qué puedo ayudarte hoy?</p>
+            <span class="message-time" id="welcome-time"></span>
+          </div>
+        </div>
+
+        <!-- Sugerencias -->
+        <div class="suggestions" id="suggestions">
+          <button class="suggestion-btn">¿Qué puede hacer este agente?</button>
+          <button class="suggestion-btn">Cuéntame sobre tus productos</button>
+          <button class="suggestion-btn">Tengo una consulta</button>
+        </div>
+      </div>
+
+      <!-- Input -->
+      <div class="chatbot-input-container">
+        <form id="chatbot-form" class="chatbot-form">
+          <input 
+            type="text" 
+            id="chatbot-input" 
+            class="chatbot-input" 
+            placeholder="Escribe tu mensaje..."
+            autocomplete="off"
+          />
+          <button type="submit" class="chatbot-send" id="chatbot-send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 19V5M5 12l7-7 7 7"/>
+            </svg>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="widget.js"></script>
+</body>
+</html>
