@@ -60,10 +60,13 @@
     }
 
     // Event listeners
-    toggleBtn.addEventListener('click', toggleChat);
+    toggleBtn.addEventListener('click', handleToggleClick);
     closeBtn.addEventListener('click', closeChat);
     form.addEventListener('submit', handleSubmit);
     input.addEventListener('input', handleInputChange);
+    
+    // Hacer el botón arrastrable
+    initDraggable();
 
     // Sugerencias
     if (suggestionsEl) {
@@ -233,4 +236,166 @@
   function generateSessionId() {
     return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
   }
+
+  // ============================================
+  // DRAGGABLE - Arrastrar y ocultar en bordes
+  // ============================================
+  let isDragging = false;
+  let hasDragged = false;
+  let startX, startY, initialX, initialY;
+  let buttonHidden = false;
+
+  function handleToggleClick(e) {
+    // Solo abrir chat si no se arrastró
+    if (!hasDragged && !buttonHidden) {
+      toggleChat();
+    }
+    hasDragged = false;
+  }
+
+  function initDraggable() {
+    // Mouse events
+    toggleBtn.addEventListener('mousedown', dragStart);
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('mouseup', dragEnd);
+    
+    // Touch events
+    toggleBtn.addEventListener('touchstart', dragStart, { passive: false });
+    document.addEventListener('touchmove', drag, { passive: false });
+    document.addEventListener('touchend', dragEnd);
+    
+    // Estilo para indicar que es arrastrable
+    toggleBtn.style.cursor = 'grab';
+    toggleBtn.style.touchAction = 'none';
+  }
+
+  function dragStart(e) {
+    if (isOpen || buttonHidden) return;
+    
+    isDragging = true;
+    hasDragged = false;
+    toggleBtn.style.cursor = 'grabbing';
+    toggleBtn.style.transition = 'none';
+    
+    const rect = toggleBtn.getBoundingClientRect();
+    initialX = rect.left;
+    initialY = rect.top;
+    
+    if (e.type === 'touchstart') {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    } else {
+      startX = e.clientX;
+      startY = e.clientY;
+    }
+    
+    // Cambiar a position fixed para mover libremente
+    toggleBtn.style.position = 'fixed';
+    toggleBtn.style.left = initialX + 'px';
+    toggleBtn.style.top = initialY + 'px';
+    toggleBtn.style.right = 'auto';
+    toggleBtn.style.bottom = 'auto';
+  }
+
+  function drag(e) {
+    if (!isDragging) return;
+    e.preventDefault();
+    
+    let currentX, currentY;
+    if (e.type === 'touchmove') {
+      currentX = e.touches[0].clientX;
+      currentY = e.touches[0].clientY;
+    } else {
+      currentX = e.clientX;
+      currentY = e.clientY;
+    }
+    
+    const deltaX = currentX - startX;
+    const deltaY = currentY - startY;
+    
+    // Si se movió más de 5px, es un drag no un click
+    if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+      hasDragged = true;
+    }
+    
+    let newX = initialX + deltaX;
+    let newY = initialY + deltaY;
+    
+    // Límites de la pantalla
+    const btnWidth = toggleBtn.offsetWidth;
+    const btnHeight = toggleBtn.offsetHeight;
+    newX = Math.max(-btnWidth / 2, Math.min(window.innerWidth - btnWidth / 2, newX));
+    newY = Math.max(0, Math.min(window.innerHeight - btnHeight, newY));
+    
+    toggleBtn.style.left = newX + 'px';
+    toggleBtn.style.top = newY + 'px';
+    
+    // Efecto visual solo cuando está MUY cerca de salir
+    if (newX < -10 || newX > window.innerWidth - btnWidth + 10) {
+      toggleBtn.style.opacity = '0.5';
+      toggleBtn.style.transform = 'scale(0.9)';
+    } else {
+      toggleBtn.style.opacity = '1';
+      toggleBtn.style.transform = 'scale(1)';
+    }
+  }
+
+  function dragEnd(e) {
+    if (!isDragging) return;
+    isDragging = false;
+    toggleBtn.style.cursor = 'grab';
+    toggleBtn.style.transition = 'all 0.3s ease';
+    toggleBtn.style.opacity = '1';
+    toggleBtn.style.transform = 'scale(1)';
+    
+    const rect = toggleBtn.getBoundingClientRect();
+    const btnWidth = toggleBtn.offsetWidth;
+    
+    // Solo desaparece si está MUY afuera (más de la mitad del botón fuera de pantalla)
+    const halfButton = btnWidth / 2;
+    
+    // Si más de la mitad está fuera por la izquierda, desaparecer
+    if (rect.left < -halfButton + 10) {
+      hideButton('left');
+      return;
+    }
+    
+    // Si más de la mitad está fuera por la derecha, desaparecer
+    if (rect.right > window.innerWidth + halfButton - 10) {
+      hideButton('right');
+      return;
+    }
+    
+    // Quedarse donde lo dejó (no volver a posición original)
+    // Solo ajustar si está parcialmente fuera de la pantalla
+    let finalX = rect.left;
+    let finalY = rect.top;
+    
+    // Mantener dentro de los límites
+    finalX = Math.max(10, Math.min(window.innerWidth - btnWidth - 10, finalX));
+    finalY = Math.max(10, Math.min(window.innerHeight - toggleBtn.offsetHeight - 10, finalY));
+    
+    toggleBtn.style.left = finalX + 'px';
+    toggleBtn.style.top = finalY + 'px';
+  }
+
+  function hideButton(direction) {
+    buttonHidden = true;
+    hasDragged = true;
+    
+    // Animar hacia afuera
+    if (direction === 'left') {
+      toggleBtn.style.left = '-80px';
+    } else {
+      toggleBtn.style.left = (window.innerWidth + 20) + 'px';
+    }
+    toggleBtn.style.opacity = '0';
+    toggleBtn.style.transform = 'scale(0.5)';
+    
+    // Después de la animación, ocultar completamente
+    setTimeout(() => {
+      toggleBtn.style.visibility = 'hidden';
+    }, 300);
+  }
+
 })();
