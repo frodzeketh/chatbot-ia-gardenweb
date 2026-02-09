@@ -22,6 +22,8 @@ async function initPinecone() {
     } catch (error) {
       console.error('❌ Error Pinecone:', error.message);
     }
+  } else {
+    console.log('⚠️ Pinecone no configurado');
   }
 }
 initPinecone();
@@ -37,11 +39,12 @@ INFORMACIÓN DEL NEGOCIO:
 
 INSTRUCCIONES:
 - Responde siempre en español de forma amable y profesional.
-- Si te saludan, saluda de vuelta.
+- Si te saludan, saluda de vuelta amablemente.
 - Si preguntan por contacto/ubicación, da la información del negocio.
-- Si hay productos en el CONTEXTO, úsalos para responder. Muestra nombre, precio y disponibilidad.
-- Si preguntan por un producto y NO está en el contexto, sugiere contactar a la tienda para consultar disponibilidad.
-- NUNCA inventes productos ni precios.`;
+- Cuando el usuario pregunte por productos, plantas o artículos, USA LA INFORMACIÓN DE {ARTICULOS} para responder.
+- Muestra los productos con su nombre, descripción, precio y disponibilidad.
+- Si {ARTICULOS} está vacío o no hay productos relevantes, sugiere contactar a la tienda.
+- NUNCA inventes productos ni precios. Solo usa lo que está en {ARTICULOS}.`;
 
 // CORS
 app.use(cors());
@@ -63,32 +66,65 @@ async function getEmbedding(text) {
 
 // Buscar en Pinecone
 async function searchProducts(query) {
-  if (!pineconeIndex) return [];
+  if (!pineconeIndex) {
+    console.log('⚠️ Pinecone no disponible');
+    return [];
+  }
   
   try {
+    console.log(`🔍 Buscando: "${query}"`);
     const embedding = await getEmbedding(query);
     const results = await pineconeIndex.query({
       vector: embedding,
-      topK: 5,
+      topK: 8,
       includeMetadata: true
     });
 
-    return results.matches
-      .filter(m => m.score > 0.3)
-      .map(m => m.metadata);
+    console.log(`📦 Resultados: ${results.matches?.length || 0}`);
+    
+    // Log estructura del primer resultado para debug
+    if (results.matches?.length > 0) {
+      console.log('🔎 Estructura metadata:', JSON.stringify(results.matches[0].metadata, null, 2));
+    }
+    
+    // Sin filtro de score - devolver todos los resultados
+    const products = results.matches?.map(m => ({
+      score: m.score,
+      ...m.metadata
+    })) || [];
+    
+    return products;
   } catch (error) {
-    console.error('Error buscando:', error.message);
+    console.error('❌ Error buscando:', error.message);
     return [];
   }
 }
 
-// Formatear productos
+// Formatear productos - usa todos los campos disponibles
 function formatProducts(products) {
-  if (!products.length) return '';
+  if (!products || products.length === 0) {
+    return '\n\n{ARTICULOS}: No se encontraron productos.';
+  }
   
-  return '\n\nCONTEXTO - Productos encontrados:\n' + products.map((p, i) => 
-    `${i + 1}. ${p.nombreWeb || p.nombre} - €${parseFloat(p.precioWeb || 0).toFixed(2)} - Stock: ${p.stockWeb || 0}`
-  ).join('\n');
+  const formatted = products.map((p, i) => {
+    // Obtener nombre del campo que exista
+    const nombre = p.nombreWeb || p.nombre || p.name || p.title || p.producto || Object.values(p).find(v => typeof v === 'string' && v.length > 2) || 'Producto';
+    
+    let info = `\n[PRODUCTO ${i + 1}]`;
+    info += `\nNombre: ${nombre}`;
+    
+    // Añadir todos los campos disponibles
+    for (const [key, value] of Object.entries(p)) {
+      if (key === 'score') continue; // Skip score
+      if (key.toLowerCase().includes('nombre') || key === 'name' || key === 'title') continue; // Ya lo pusimos
+      if (value !== null && value !== undefined && value !== '') {
+        info += `\n${key}: ${value}`;
+      }
+    }
+    return info;
+  }).join('\n');
+  
+  return `\n\n{ARTICULOS} - ${products.length} productos encontrados:${formatted}`;
 }
 
 // Config endpoint
@@ -106,9 +142,11 @@ app.post('/api/chat', async (req, res) => {
     const { message, sessionId } = req.body;
     if (!message) return res.status(400).json({ error: 'Mensaje requerido' });
 
+    console.log(`\n💬 Usuario: "${message}"`);
+
     // Buscar productos relevantes
     const products = await searchProducts(message);
-    const context = formatProducts(products);
+    const articulos = formatProducts(products);
 
     // Historial
     const convId = sessionId || 'default';
@@ -117,24 +155,29 @@ app.post('/api/chat', async (req, res) => {
     
     history.push({ role: 'user', content: message });
 
+    // Construir prompt completo
+    const fullPrompt = SYSTEM_PROMPT + articulos;
+
     // Llamar a OpenAI
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT + context },
+        { role: 'system', content: fullPrompt },
         ...history.slice(-10)
       ],
-      max_tokens: 500,
+      max_tokens: 600,
       temperature: 0.7
     });
 
     const reply = completion.choices[0].message.content;
+    console.log(`🤖 Bot: "${reply.substring(0, 100)}..."`);
+    
     history.push({ role: 'assistant', content: reply });
 
     res.json({ message: reply, sessionId: convId });
 
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('❌ Error:', error.message);
     res.status(500).json({ error: 'Error procesando mensaje' });
   }
 });
@@ -145,9 +188,12 @@ app.post('/api/chat/clear', (req, res) => {
   res.json({ success: true });
 });
 
-// Health
+// Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ 
+    status: 'ok',
+    pinecone: pineconeIndex ? 'conectado' : 'no conectado'
+  });
 });
 
 app.listen(PORT, () => {
