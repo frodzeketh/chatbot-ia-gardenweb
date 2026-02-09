@@ -30,23 +30,26 @@ async function initPinecone() {
 initPinecone();
 
 // Prompt del sistema para el asistente
-const SYSTEM_PROMPT = `Eres un asistente amigable de El Huerto Deitana. Habla de forma natural y cercana, como un experto en jardinería que ayuda a un cliente.
+const SYSTEM_PROMPT = `Eres el asistente de El Huerto Deitana.
+
+REGLA CRÍTICA - LEE ESTO:
+⚠️ SOLO puedes hablar de productos que aparecen en "PRODUCTOS ENCONTRADOS". 
+⚠️ Si un producto NO está en esa lista, NO existe para ti. NUNCA lo menciones.
+⚠️ Si te piden algo y no hay productos en el contexto, di: "No encontré ese producto en nuestro catálogo. ¿Puedo ayudarte con algo más específico?"
 
 CÓMO RESPONDER:
-- Habla de forma natural, no como un robot. Usa un tono conversacional y cálido.
-- Si te preguntan por un producto, preséntalo de forma atractiva, destacando sus beneficios.
-- Usa la información EXACTA del contexto (descripción, precio, stock). No inventes nada.
-- Si hay varios productos relevantes, recomienda el mejor según la consulta.
-- Puedes dar consejos de jardinería relacionados si es apropiado.
-- Si no encuentras lo que buscan, sugiéreles contactar la tienda.
+1. Revisa los "PRODUCTOS ENCONTRADOS" que te doy.
+2. SOLO habla de esos productos. Usa su nombre, precio y descripción EXACTOS.
+3. Si la lista dice "No se encontraron productos", NO inventes ninguno.
+4. Sé amable pero honesto. Mejor decir "no lo tenemos" que inventar.
 
-INFORMACIÓN A INCLUIR:
-- Nombre del producto
-- Precio (usa el precioWeb)
-- Descripción del producto (si existe, úsala tal cual)
-- Disponibilidad (stock web)
+FORMATO:
+- Nombre del producto (como aparece en el contexto)
+- Precio: €X.XX (el precioWeb del contexto)
+- Descripción (COPIA la del contexto, no la modifiques)
+- Disponibilidad: X unidades
 
-Responde siempre en español y sé conciso pero informativo.`;
+Responde en español, sé conciso y NUNCA inventes información.`;
 
 // Configuración de CORS
 app.use(cors({
@@ -174,9 +177,14 @@ app.post('/api/chat', async (req, res) => {
     const recentHistory = conversationHistory.slice(-10);
 
     // Crear mensajes para OpenAI
+    const hasProducts = products.length > 0;
+    const contextMessage = hasProducts 
+      ? `PRODUCTOS ENCONTRADOS (solo puedes hablar de estos):\n\n${productsContext}`
+      : `⚠️ NO SE ENCONTRARON PRODUCTOS para esta consulta. NO inventes ningún producto. Pide al usuario que sea más específico o que contacte la tienda.`;
+    
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'system', content: `PRODUCTOS ENCONTRADOS PARA ESTA CONSULTA:\n\n${productsContext}` },
+      { role: 'system', content: contextMessage },
       ...recentHistory
     ];
 
@@ -186,7 +194,7 @@ app.post('/api/chat', async (req, res) => {
       model: 'gpt-4o-mini',
       messages: messages,
       max_tokens: 600,
-      temperature: 0.5
+      temperature: 0.3
     });
 
     const assistantMessage = completion.choices[0].message.content;
