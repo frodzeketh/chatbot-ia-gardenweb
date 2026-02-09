@@ -269,22 +269,43 @@ html, body {
   margin: 8px 0;
 }
 
+/* Tablas compactas */
+.message-text .table-wrapper {
+  margin: 10px 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
 .message-text table {
   width: 100%;
   border-collapse: collapse;
-  margin: 8px 0;
   font-size: 13px;
 }
 
 .message-text th, .message-text td {
-  border: 1px solid var(--border);
-  padding: 6px 10px;
+  padding: 10px 12px;
   text-align: left;
+  border-bottom: 1px solid var(--border);
 }
 
 .message-text th {
-  background: var(--bg-message);
+  background: var(--primary);
+  color: white;
   font-weight: 600;
+  font-size: 12px;
+}
+
+.message-text td {
+  background: var(--bg);
+}
+
+.message-text tr:last-child td {
+  border-bottom: none;
+}
+
+.message-text tr:nth-child(even) td {
+  background: var(--bg-message);
 }
 
 .message-text h1, .message-text h2, .message-text h3 {

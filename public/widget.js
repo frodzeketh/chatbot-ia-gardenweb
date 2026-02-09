@@ -215,11 +215,19 @@
 
   // Renderizar markdown con marked.js
   function renderMarkdown(text) {
+    let html;
     if (typeof marked !== 'undefined') {
-      return marked.parse(text);
+      html = marked.parse(text);
+    } else {
+      // Fallback si marked no cargó
+      html = text.replace(/\n/g, '<br>');
     }
-    // Fallback si marked no cargó
-    return text.replace(/\n/g, '<br>');
+    
+    // Envolver tablas en contenedor scrollable
+    html = html.replace(/<table>/g, '<div class="table-wrapper"><table>');
+    html = html.replace(/<\/table>/g, '</table></div>');
+    
+    return html;
   }
 
   function generateSessionId() {
