@@ -134,13 +134,16 @@
     const typingEl = showTyping();
 
     try {
+      console.log('Enviando a:', `${API_BASE}/api/chat`);
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, sessionId })
       });
 
+      console.log('Respuesta status:', response.status);
       const data = await response.json();
+      console.log('Datos recibidos:', data);
       typingEl.remove();
 
       if (response.ok) {
@@ -151,6 +154,7 @@
         addMessage(data.error || 'Error al procesar el mensaje.', 'bot');
       }
     } catch (error) {
+      console.error('Error en fetch:', error);
       typingEl.remove();
       addMessage('Error de conexión. Por favor, verifica tu internet.', 'bot');
     }
@@ -163,10 +167,12 @@
     div.className = `message ${type}-message`;
     
     const time = formatTime(new Date());
+    // Usar markdown para bot, escape para usuario
+    const content = type === 'bot' ? renderMarkdown(text) : escapeHtml(text);
     
     div.innerHTML = `
       <div class="message-bubble">
-        <p>${escapeHtml(text)}</p>
+        <div class="message-text">${content}</div>
         <span class="message-time">${time}</span>
       </div>
     `;
@@ -205,6 +211,15 @@
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  // Renderizar markdown con marked.js
+  function renderMarkdown(text) {
+    if (typeof marked !== 'undefined') {
+      return marked.parse(text);
+    }
+    // Fallback si marked no cargó
+    return text.replace(/\n/g, '<br>');
   }
 
   function generateSessionId() {
