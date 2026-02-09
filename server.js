@@ -9,10 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Cliente OpenAI
-let openai = null;
-if (process.env.OPENAI_API_KEY) {
-  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-}
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Cliente Pinecone
 let pineconeIndex = null;
@@ -21,227 +18,138 @@ async function initPinecone() {
     try {
       const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
       pineconeIndex = pinecone.index(process.env.PINECONE_INDEX);
-      console.log('✅ Pinecone conectado correctamente');
+      console.log('✅ Pinecone conectado');
     } catch (error) {
-      console.error('❌ Error conectando a Pinecone:', error.message);
+      console.error('❌ Error Pinecone:', error.message);
     }
   }
 }
 initPinecone();
 
-// Prompt del sistema para el asistente
-const SYSTEM_PROMPT = `Eres el asistente de El Huerto Deitana.
+// Prompt del sistema
+const SYSTEM_PROMPT = `Eres el asistente virtual de El Huerto Deitana, un vivero especializado en plantas de huerto.
 
-REGLA CRÍTICA - LEE ESTO:
-⚠️ SOLO puedes hablar de productos que aparecen en "PRODUCTOS ENCONTRADOS". 
-⚠️ Si un producto NO está en esa lista, NO existe para ti. NUNCA lo menciones.
-⚠️ Si te piden algo y no hay productos en el contexto, di: "No encontré ese producto en nuestro catálogo. ¿Puedo ayudarte con algo más específico?"
+INFORMACIÓN DEL NEGOCIO:
+- Nombre: El Huerto Deitana
+- Dirección: Ctra. Mazarrón, km 2,4 - 30850 Totana, Murcia, España
+- Teléfono: 968 422 335
+- Email: info@plantasdehuerto.com
 
-CÓMO RESPONDER:
-1. Revisa los "PRODUCTOS ENCONTRADOS" que te doy.
-2. SOLO habla de esos productos. Usa su nombre, precio y descripción EXACTOS.
-3. Si la lista dice "No se encontraron productos", NO inventes ninguno.
-4. Sé amable pero honesto. Mejor decir "no lo tenemos" que inventar.
+INSTRUCCIONES:
+- Responde siempre en español de forma amable y profesional.
+- Si te saludan, saluda de vuelta.
+- Si preguntan por contacto/ubicación, da la información del negocio.
+- Si hay productos en el CONTEXTO, úsalos para responder. Muestra nombre, precio y disponibilidad.
+- Si preguntan por un producto y NO está en el contexto, sugiere contactar a la tienda para consultar disponibilidad.
+- NUNCA inventes productos ni precios.`;
 
-FORMATO:
-- Nombre del producto (como aparece en el contexto)
-- Precio: €X.XX (el precioWeb del contexto)
-- Descripción (COPIA la del contexto, no la modifiques)
-- Disponibilidad: X unidades
-
-Responde en español, sé conciso y NUNCA inventes información.`;
-
-// Configuración de CORS
-app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true);
-    return callback(null, true);
-  },
-  credentials: true
-}));
-
+// CORS
+app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Almacenamiento de conversaciones
 const conversations = new Map();
 
-// Función para generar embedding con OpenAI (512 dimensiones para coincidir con Pinecone)
+// Generar embedding
 async function getEmbedding(text) {
-  if (!openai) return null;
-  try {
-    const response = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
-      input: text,
-      dimensions: 512
-    });
-    return response.data[0].embedding;
-  } catch (error) {
-    console.error('Error generando embedding:', error.message);
-    return null;
-  }
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-3-small',
+    input: text,
+    dimensions: 512
+  });
+  return response.data[0].embedding;
 }
 
-// Función para buscar productos en Pinecone
-async function searchProducts(query, topK = 5) {
-  if (!pineconeIndex || !openai) return [];
+// Buscar en Pinecone
+async function searchProducts(query) {
+  if (!pineconeIndex) return [];
   
   try {
     const embedding = await getEmbedding(query);
-    if (!embedding) return [];
-
     const results = await pineconeIndex.query({
       vector: embedding,
-      topK: topK,
+      topK: 5,
       includeMetadata: true
     });
 
-    return results.matches.map(match => ({
-      id: match.id,
-      score: match.score,
-      ...match.metadata
-    }));
+    return results.matches
+      .filter(m => m.score > 0.3)
+      .map(m => m.metadata);
   } catch (error) {
-    console.error('Error buscando en Pinecone:', error.message);
+    console.error('Error buscando:', error.message);
     return [];
   }
 }
 
-// Función para formatear productos como contexto
-function formatProductsContext(products) {
-  if (!products || products.length === 0) {
-    return 'No se encontraron productos relevantes para esta consulta.';
-  }
-
-  return products.map((p, i) => {
-    let info = `PRODUCTO ${i + 1}:\n`;
-    info += `- Nombre: ${p.nombreWeb || p.nombre || 'Sin nombre'}\n`;
-    if (p.descripcion) info += `- Descripción: ${p.descripcion}\n`;
-    if (p.precioWeb) info += `- Precio web: €${parseFloat(p.precioWeb).toFixed(2)}\n`;
-    if (p.stockWeb !== undefined) info += `- Stock disponible online: ${p.stockWeb} unidades\n`;
-    if (p.estadoWeb) info += `- Estado: ${p.estadoWeb}\n`;
-    return info;
-  }).join('\n');
+// Formatear productos
+function formatProducts(products) {
+  if (!products.length) return '';
+  
+  return '\n\nCONTEXTO - Productos encontrados:\n' + products.map((p, i) => 
+    `${i + 1}. ${p.nombreWeb || p.nombre} - €${parseFloat(p.precioWeb || 0).toFixed(2)} - Stock: ${p.stockWeb || 0}`
+  ).join('\n');
 }
 
-// Endpoint de configuración
+// Config endpoint
 app.get('/api/config', (req, res) => {
   res.json({
-    botName: process.env.BOT_NAME || 'Huerto IA',
+    botName: process.env.BOT_NAME || 'Huerto Deitana IA',
     welcomeMessage: process.env.BOT_WELCOME_MESSAGE || '¡Hola! Soy el asistente de El Huerto Deitana. ¿En qué puedo ayudarte?',
-    primaryColor: process.env.PRIMARY_COLOR || '#8B7355',
-    position: 'right'
+    primaryColor: process.env.PRIMARY_COLOR || '#4A7C59'
   });
 });
 
-// Endpoint principal del chat
+// Chat endpoint
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, sessionId } = req.body;
-    console.log(`\n📩 Mensaje recibido: "${message}"`);
+    if (!message) return res.status(400).json({ error: 'Mensaje requerido' });
 
-    if (!message) {
-      console.log('❌ Mensaje vacío');
-      return res.status(400).json({ error: 'El mensaje es requerido' });
-    }
+    // Buscar productos relevantes
+    const products = await searchProducts(message);
+    const context = formatProducts(products);
 
-    if (!openai) {
-      console.log('❌ OpenAI no configurado');
-      return res.status(500).json({ error: 'API Key de OpenAI no configurada' });
-    }
-
-    // Buscar productos relevantes en Pinecone
-    console.log('🔍 Buscando productos en Pinecone...');
-    const products = await searchProducts(message, 5);
-    console.log(`📦 Productos encontrados: ${products.length}`);
-    if (products.length > 0) {
-      console.log('📋 Productos:', products.map(p => p.nombreWeb || p.nombre).join(', '));
-    }
-    const productsContext = formatProductsContext(products);
-    console.log('📄 Contexto:\n', productsContext);
-
-    // Historial de conversación
-    const conversationId = sessionId || 'default';
-    if (!conversations.has(conversationId)) {
-      conversations.set(conversationId, []);
-    }
-    const conversationHistory = conversations.get(conversationId);
-
-    // Agregar mensaje del usuario
-    conversationHistory.push({
-      role: 'user',
-      content: message
-    });
-
-    // Mantener últimos 10 mensajes
-    const recentHistory = conversationHistory.slice(-10);
-
-    // Crear mensajes para OpenAI
-    const hasProducts = products.length > 0;
-    const contextMessage = hasProducts 
-      ? `PRODUCTOS ENCONTRADOS (solo puedes hablar de estos):\n\n${productsContext}`
-      : `⚠️ NO SE ENCONTRARON PRODUCTOS para esta consulta. NO inventes ningún producto. Pide al usuario que sea más específico o que contacte la tienda.`;
+    // Historial
+    const convId = sessionId || 'default';
+    if (!conversations.has(convId)) conversations.set(convId, []);
+    const history = conversations.get(convId);
     
-    const messages = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'system', content: contextMessage },
-      ...recentHistory
-    ];
+    history.push({ role: 'user', content: message });
 
     // Llamar a OpenAI
-    console.log('🤖 Llamando a OpenAI...');
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: messages,
-      max_tokens: 600,
-      temperature: 0.3
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT + context },
+        ...history.slice(-10)
+      ],
+      max_tokens: 500,
+      temperature: 0.7
     });
 
-    const assistantMessage = completion.choices[0].message.content;
-    console.log('✅ Respuesta generada');
+    const reply = completion.choices[0].message.content;
+    history.push({ role: 'assistant', content: reply });
 
-    // Guardar respuesta
-    conversationHistory.push({
-      role: 'assistant',
-      content: assistantMessage
-    });
-
-    res.json({
-      message: assistantMessage,
-      sessionId: conversationId
-    });
+    res.json({ message: reply, sessionId: convId });
 
   } catch (error) {
-    console.error('❌ Error en chat:', error.message);
-    res.status(500).json({ 
-      error: 'Error al procesar el mensaje',
-      details: error.message 
-    });
+    console.error('Error:', error.message);
+    res.status(500).json({ error: 'Error procesando mensaje' });
   }
 });
 
-// Limpiar conversación
+// Limpiar chat
 app.post('/api/chat/clear', (req, res) => {
-  const { sessionId } = req.body;
-  conversations.delete(sessionId || 'default');
+  conversations.delete(req.body.sessionId || 'default');
   res.json({ success: true });
 });
 
-// Health check
+// Health
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    pinecone: pineconeIndex ? 'connected' : 'not connected',
-    openai: openai ? 'configured' : 'not configured'
-  });
-});
-
-app.get('/embed.js', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'embed.js'));
+  res.json({ status: 'ok' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`🤖 OpenAI: ${openai ? 'Configurado' : 'No configurado'}`);
-  console.log(`📦 Widget: http://localhost:${PORT}/embed.js`);
+  console.log(`🚀 Servidor en puerto ${PORT}`);
 });
