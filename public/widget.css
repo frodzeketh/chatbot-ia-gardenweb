@@ -366,10 +366,12 @@ html, body {
   flex: 1;
   border: none;
   background: transparent;
-  font-size: 14px;
+  font-size: 16px;
   color: var(--text);
   outline: none;
   padding: 8px 0;
+  /* Evita zoom en iOS */
+  -webkit-text-size-adjust: 100%;
 }
 
 .chatbot-input::placeholder {
