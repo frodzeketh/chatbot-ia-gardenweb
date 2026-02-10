@@ -597,25 +597,28 @@ html, body {
   }
 
   .chatbot-window {
+    top: 0;
     bottom: 0;
     right: 0;
     left: 0;
     width: 100%;
-    /* Altura visible en iOS (no se mete bajo la barra de URL) */
-    height: 100vh;
-    height: 100dvh;
-    max-height: 100dvh;
+    height: 100%;
+    max-height: 100%;
     border-radius: 0;
     border: none;
   }
 
   /* Para que el input quede visible: el área de mensajes debe poder encogerse */
   .chatbot-messages {
+    flex: 1;
     min-height: 0;
+    overflow-y: auto;
   }
 
-  /* Input por encima de la barra de URL / UI del navegador en iOS */
+  /* Asegurar que el input siempre quede visible abajo */
   .chatbot-input-container {
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 56px);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
   }
 }
