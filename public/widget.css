@@ -601,7 +601,10 @@ html, body {
     right: 0;
     left: 0;
     width: 100%;
-    height: 100%;
+    /* Altura visible en iOS (no se mete bajo la barra de URL) */
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
     border-radius: 0;
     border: none;
   }
