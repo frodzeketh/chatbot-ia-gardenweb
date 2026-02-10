@@ -6,11 +6,12 @@
 
   // Configuración
   let API_BASE = window.location.origin;
-  let sessionId = localStorage.getItem('chatbot_session_id') || generateSessionId();
+  let deviceId = localStorage.getItem('chatbot_device_id') || generateDeviceId();
   let isOpen = false;
   let config = {};
 
-  localStorage.setItem('chatbot_session_id', sessionId);
+  // Persistir deviceId - identificador anónimo único por dispositivo
+  localStorage.setItem('chatbot_device_id', deviceId);
 
   // Elementos del DOM
   const container = document.getElementById('chatbot-container');
@@ -63,6 +64,9 @@
       console.log('Usando configuración por defecto');
     }
 
+    // Cargar historial de la sesión actual (para mantener conversación al recargar)
+    await loadChatHistory();
+
     // Event listeners
     toggleBtn.addEventListener('click', handleToggleClick);
     closeBtn.addEventListener('click', closeChat);
@@ -90,6 +94,57 @@
     
     // Burbuja de atención
     initAttentionBubble();
+  }
+  
+  // Cargar historial de conversación del día
+  async function loadChatHistory() {
+    try {
+      const response = await fetch(`${API_BASE}/api/chat/history?deviceId=${encodeURIComponent(deviceId)}`);
+      const data = await response.json();
+      
+      if (data.messages && data.messages.length > 0) {
+        // Ocultar sugerencias si hay historial
+        if (suggestionsEl) suggestionsEl.classList.add('hidden');
+        
+        // Añadir cada mensaje del historial
+        data.messages.forEach(msg => {
+          const type = msg.role === 'user' ? 'user' : 'bot';
+          addHistoryMessage(msg.content, type, msg.timestamp);
+        });
+        
+        // Scroll al final
+        scrollToBottom();
+      }
+    } catch (e) {
+      console.log('No se pudo cargar historial:', e.message);
+    }
+  }
+  
+  // Añadir mensaje del historial (con timestamp guardado)
+  function addHistoryMessage(text, type, timestamp) {
+    const div = document.createElement('div');
+    div.className = `message ${type}-message`;
+    
+    // Usar timestamp guardado o actual
+    let time;
+    if (timestamp) {
+      const date = new Date(timestamp);
+      time = formatTime(date);
+    } else {
+      time = formatTime(new Date());
+    }
+    
+    // Usar markdown para bot, escape para usuario
+    const content = type === 'bot' ? renderMarkdown(text) : escapeHtml(text);
+    
+    div.innerHTML = `
+      <div class="message-bubble">
+        <div class="message-text">${content}</div>
+        <span class="message-time">${time}</span>
+      </div>
+    `;
+
+    messagesContainer.appendChild(div);
   }
   
   function initAttentionBubble() {
@@ -192,22 +247,22 @@
     const typingEl = showTyping();
 
     try {
-      console.log('Enviando a:', `${API_BASE}/api/chat`);
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, sessionId })
+        body: JSON.stringify({ message, deviceId })
       });
 
-      console.log('Respuesta status:', response.status);
       const data = await response.json();
-      console.log('Datos recibidos:', data);
       typingEl.remove();
 
       if (response.ok) {
         addMessage(data.message, 'bot');
-        sessionId = data.sessionId;
-        localStorage.setItem('chatbot_session_id', sessionId);
+        // Actualizar deviceId si el servidor lo devuelve diferente
+        if (data.deviceId && data.deviceId !== deviceId) {
+          deviceId = data.deviceId;
+          localStorage.setItem('chatbot_device_id', deviceId);
+        }
       } else {
         addMessage(data.error || 'Error al procesar el mensaje.', 'bot');
       }
@@ -285,11 +340,58 @@
     html = html.replace(/<table>/g, '<div class="table-wrapper"><table>');
     html = html.replace(/<\/table>/g, '</table></div>');
     
+    // Convertir links de WhatsApp a componente bonito
+    html = convertWhatsAppLinks(html);
+    
+    // Convertir tarjeta de contacto especial
+    html = convertContactCard(html);
+    
     return html;
   }
+  
+  // Convertir links de WhatsApp a tarjeta moderna
+  function convertWhatsAppLinks(html) {
+    const waLinkRegex = /<a[^>]*href=["'](https?:\/\/(wa\.me|api\.whatsapp\.com)\/(\d+)[^"']*)["'][^>]*>[^<]*<\/a>/gi;
+    
+    return html.replace(waLinkRegex, (match, url, domain, phone) => {
+      return createContactCard(phone);
+    });
+  }
+  
+  // Convertir formato [CONTACTO] a tarjeta moderna
+  function convertContactCard(html) {
+    const contactRegex = /\[CONTACTO:([^:]+):([^:]+):([^\]]+)\]/g;
+    
+    return html.replace(contactRegex, (match, whatsapp, telefono, email) => {
+      return createContactCard(whatsapp, telefono);
+    });
+  }
+  
+  // Crear tarjeta de contacto
+  function createContactCard(whatsapp, telefono) {
+    const waIcon = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>`;
+    
+    return `<div class="contact-card">
+      <img src="logo-crop-huerto.png" alt="El Huerto Deitana" class="contact-card-logo">
+      <div class="contact-card-row">
+        <span class="contact-card-msg">¿Necesitas ayuda?</span>
+        <a href="https://wa.me/${whatsapp}" target="_blank" rel="noopener" class="contact-card-btn wa">${waIcon} Contactar</a>
+      </div>
+    </div>`;
+  }
 
-  function generateSessionId() {
-    return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+  // Genera un identificador único anónimo por dispositivo (UUID v4)
+  function generateDeviceId() {
+    // Usar crypto.randomUUID si está disponible (navegadores modernos)
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return 'dev_' + crypto.randomUUID();
+    }
+    // Fallback para navegadores antiguos
+    return 'dev_' + 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
   }
 
   // ============================================

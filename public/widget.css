@@ -323,6 +323,64 @@ html, body {
   text-decoration: underline;
 }
 
+/* Contact Card - Simple y limpio */
+.contact-card {
+  background: #FAFAFA;
+  border: 1px solid #EAEAEA;
+  border-radius: 12px;
+  padding: 14px;
+  margin: 10px 0;
+  text-align: center;
+}
+
+.contact-card-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  object-fit: cover;
+  margin-bottom: 10px;
+}
+
+.contact-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.contact-card-msg {
+  font-size: 13px;
+  color: #333;
+  text-align: left;
+}
+
+.contact-card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none !important;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.contact-card-btn.wa {
+  background: #25D366;
+  color: white !important;
+}
+
+.contact-card-btn.wa:hover {
+  background: #1da851;
+}
+
+.contact-card-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
 .wave {
   display: inline-block;
 }

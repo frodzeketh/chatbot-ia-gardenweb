@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const OpenAI = require('openai');
 const { Pinecone } = require('@pinecone-database/pinecone');
+const admin = require('firebase-admin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,6 +13,114 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const INDEX_NAME = process.env.PINECONE_INDEX || 'products';
 
+// ============================================
+// FIREBASE ADMIN - Inicialización segura
+// ============================================
+let db = null;
+
+function initFirebase() {
+  if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY) {
+    try {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+        })
+      });
+      db = admin.firestore();
+      console.log('✅ Firebase: Conectado');
+    } catch (e) {
+      console.error('❌ Firebase:', e.message);
+    }
+  } else {
+    console.log('⚠️ Firebase: No configurado (usando memoria)');
+  }
+}
+initFirebase();
+
+// ============================================
+// FIRESTORE - Funciones de persistencia
+// ============================================
+
+// Obtener la fecha de sesión en hora española (nuevo día a las 6:00 AM)
+function getSessionDate() {
+  const now = new Date();
+  
+  // Convertir a hora española (Europe/Madrid)
+  const spainTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));
+  
+  // Si son antes de las 6:00 AM, usar fecha del día anterior
+  if (spainTime.getHours() < 6) {
+    spainTime.setDate(spainTime.getDate() - 1);
+  }
+  
+  // Formato: YYYY-MM-DD
+  const year = spainTime.getFullYear();
+  const month = String(spainTime.getMonth() + 1).padStart(2, '0');
+  const day = String(spainTime.getDate()).padStart(2, '0');
+  
+  return `${year}-${month}-${day}`;
+}
+
+async function getConversationFromDB(deviceId) {
+  if (!db) return null;
+  
+  try {
+    const sessionDate = getSessionDate();
+    const docRef = db.collection('conversations').doc(deviceId)
+                     .collection('sessions').doc(sessionDate);
+    const doc = await docRef.get();
+    
+    if (doc.exists) {
+      return doc.data();
+    }
+    return null;
+  } catch (e) {
+    console.error('❌ Firestore get:', e.message);
+    return null;
+  }
+}
+
+async function saveConversationToDB(deviceId, messages) {
+  if (!db) return;
+  
+  try {
+    const sessionDate = getSessionDate();
+    
+    // Guardar en la sesión del día
+    const sessionRef = db.collection('conversations').doc(deviceId)
+                         .collection('sessions').doc(sessionDate);
+    
+    const sessionData = {
+      messages: messages.slice(-100), // Guardar últimos 100 mensajes por sesión
+      lastActivity: admin.firestore.FieldValue.serverTimestamp(),
+      messageCount: messages.length,
+      sessionDate: sessionDate
+    };
+    
+    const sessionDoc = await sessionRef.get();
+    if (!sessionDoc.exists) {
+      sessionData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+    
+    await sessionRef.set(sessionData, { merge: true });
+    
+    // Actualizar también el documento principal del dispositivo
+    await db.collection('conversations').doc(deviceId).set({
+      lastActivity: admin.firestore.FieldValue.serverTimestamp(),
+      lastSessionDate: sessionDate,
+      totalSessions: admin.firestore.FieldValue.increment(sessionDoc.exists ? 0 : 1)
+    }, { merge: true });
+    
+  } catch (e) {
+    console.error('❌ Firestore save:', e.message);
+  }
+}
+
+// ============================================
+// PINECONE
+// ============================================
 let pineconeIndex = null;
 
 async function initPinecone() {
@@ -101,7 +210,25 @@ NUNCA:
 - Dejes ir al cliente sin ofrecer complementarios
 - Seas robótico o repetitivo
 
-RECUERDA: Eres un vendedor que quiere ayudar al cliente a tener éxito con sus plantas, no un catálogo.`;
+RECUERDA: Eres un vendedor que quiere ayudar al cliente a tener éxito con sus plantas, no un catálogo.
+
+═══════════════════════════════════════════════
+CONTACTO Y WHATSAPP
+═══════════════════════════════════════════════
+
+Cuando el cliente pida WhatsApp, teléfono o contacto, usa este formato que se mostrará como tarjeta bonita:
+
+[CONTACTO:34968422335:+34968422335:info@plantasdehuerto.com]
+
+O si solo quieres dar el WhatsApp, usa un link normal a wa.me:
+https://wa.me/34968422335
+
+Estos links se convertirán automáticamente en botones bonitos de WhatsApp.
+
+Datos de contacto:
+- WhatsApp/Teléfono: 968 422 335 (con prefijo España: 34968422335)
+- Email: info@plantasdehuerto.com
+- Dirección: Ctra. Mazarrón km 2,4, Totana, Murcia`;
 
 // ============================================
 // BÚSQUEDA Y FORMATO
@@ -199,21 +326,33 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const conversations = new Map();
+// Cache en memoria para sesiones activas (reduce lecturas a Firestore)
+const memoryCache = new Map();
 
-function getConversation(sessionId) {
-  if (!conversations.has(sessionId)) {
-    conversations.set(sessionId, { messages: [], createdAt: Date.now() });
+async function getConversation(deviceId) {
+  // Primero buscar en cache
+  if (memoryCache.has(deviceId)) {
+    return memoryCache.get(deviceId);
   }
-  return conversations.get(sessionId);
+  
+  // Luego buscar en Firestore
+  const dbConv = await getConversationFromDB(deviceId);
+  const conv = {
+    messages: dbConv?.messages || [],
+    createdAt: Date.now()
+  };
+  
+  memoryCache.set(deviceId, conv);
+  return conv;
 }
 
+// Limpiar cache cada 30 minutos (las conversaciones persisten en Firestore)
 setInterval(() => {
   const now = Date.now();
-  for (const [id, conv] of conversations) {
-    if (now - conv.createdAt > 3600000) conversations.delete(id);
+  for (const [id, conv] of memoryCache) {
+    if (now - conv.createdAt > 1800000) memoryCache.delete(id);
   }
-}, 300000);
+}, 600000);
 
 app.get('/api/config', (req, res) => {
   res.json({
@@ -223,15 +362,59 @@ app.get('/api/config', (req, res) => {
   });
 });
 
+// Endpoint para cargar historial de la sesión actual (al recargar página)
+app.get('/api/chat/history', async (req, res) => {
+  try {
+    const { deviceId } = req.query;
+    
+    // Validar deviceId
+    if (!deviceId || !/^dev_[a-f0-9-]{36}$/.test(deviceId)) {
+      return res.json({ messages: [], sessionDate: getSessionDate() });
+    }
+    
+    const conv = await getConversationFromDB(deviceId);
+    const sessionDate = getSessionDate();
+    
+    if (conv && conv.messages) {
+      // Devolver mensajes formateados para el widget
+      const messages = conv.messages.map(m => ({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp || null
+      }));
+      
+      res.json({ 
+        messages, 
+        sessionDate,
+        messageCount: messages.length
+      });
+    } else {
+      res.json({ messages: [], sessionDate });
+    }
+  } catch (error) {
+    console.error('❌ History:', error.message);
+    res.json({ messages: [], sessionDate: getSessionDate() });
+  }
+});
+
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, sessionId } = req.body;
+    const { message, deviceId } = req.body;
     if (!message) return res.status(400).json({ error: 'Mensaje requerido' });
-
-    const conv = getConversation(sessionId || 'default');
-    conv.messages.push({ role: 'user', content: message });
     
-    console.log(`\n👤 "${message}"`);
+    // Validar deviceId (debe empezar con 'dev_' y tener formato UUID-like)
+    const safeDeviceId = (deviceId && /^dev_[a-f0-9-]{36}$/.test(deviceId)) 
+      ? deviceId 
+      : 'anonymous';
+
+    const conv = await getConversation(safeDeviceId);
+    conv.messages.push({ 
+      role: 'user', 
+      content: message, 
+      timestamp: new Date().toISOString() 
+    });
+    
+    console.log(`\n👤 [${safeDeviceId.slice(0, 12)}...] "${message}"`);
     
     // Llamada inicial
     let response = await openai.chat.completions.create({
@@ -291,11 +474,20 @@ app.post('/api/chat', async (req, res) => {
     }
     
     const reply = assistantMessage.content || 'No pude procesar tu consulta. ¿Puedes reformularla?';
-    conv.messages.push({ role: 'assistant', content: reply });
+    conv.messages.push({ 
+      role: 'assistant', 
+      content: reply, 
+      timestamp: new Date().toISOString() 
+    });
+    
+    // Guardar en Firestore (async, no bloquea respuesta)
+    saveConversationToDB(safeDeviceId, conv.messages).catch(e => 
+      console.error('❌ Save async:', e.message)
+    );
     
     console.log(`💬 OK (${searchCount} búsquedas)\n`);
 
-    res.json({ message: reply, sessionId: sessionId || 'default' });
+    res.json({ message: reply, deviceId: safeDeviceId });
 
   } catch (error) {
     console.error('❌', error.message);
@@ -303,13 +495,22 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.post('/api/chat/clear', (req, res) => {
-  conversations.delete(req.body.sessionId || 'default');
+app.post('/api/chat/clear', async (req, res) => {
+  const { deviceId } = req.body;
+  if (deviceId) {
+    // Solo limpiar cache en memoria
+    // NO borramos de Firestore para mantener registros históricos
+    memoryCache.delete(deviceId);
+  }
   res.json({ success: true });
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', pinecone: pineconeIndex ? 'ok' : 'no' });
+  res.json({ 
+    status: 'ok', 
+    pinecone: pineconeIndex ? 'ok' : 'no',
+    firebase: db ? 'ok' : 'no'
+  });
 });
 
 app.listen(PORT, () => {
