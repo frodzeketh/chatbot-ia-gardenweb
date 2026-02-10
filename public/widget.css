@@ -168,12 +168,14 @@ html, body {
 /* Mensajes */
 .chatbot-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
   background: var(--bg);
+  -webkit-overflow-scrolling: touch;
 }
 
 .chatbot-messages::-webkit-scrollbar {
@@ -582,7 +584,7 @@ html, body {
   display: none;
 }
 
-/* Responsive móvil */
+/* Responsive móvil - Android / iOS */
 @media (max-width: 400px) {
   .chatbot-container {
     bottom: 16px;
@@ -595,12 +597,26 @@ html, body {
   }
 
   .chatbot-window {
+    top: 0;
     bottom: 0;
-    right: 0;
     left: 0;
+    right: 0;
     width: 100%;
     height: 100%;
+    max-height: 100vh;
+    max-height: 100dvh;
     border-radius: 0;
     border: none;
+    box-sizing: border-box;
+  }
+
+  .chatbot-header {
+    padding-top: max(16px, env(safe-area-inset-top, 0));
+  }
+
+  .chatbot-input-container {
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0));
+    padding-left: max(20px, env(safe-area-inset-left, 0));
+    padding-right: max(20px, env(safe-area-inset-right, 0));
   }
 }
