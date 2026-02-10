@@ -584,16 +584,8 @@ html, body {
   display: none;
 }
 
-/* Responsive móvil - Android / iOS */
+/* Responsive móvil - solo interfaz del chat al abrirlo */
 @media (max-width: 400px) {
-  html, body {
-    height: 100vh;
-    height: 100dvh;
-    max-height: 100vh;
-    max-height: 100dvh;
-    overflow: hidden;
-  }
-
   .chatbot-container {
     bottom: 16px;
     right: 16px;
@@ -605,39 +597,17 @@ html, body {
   }
 
   .chatbot-window {
-    top: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    width: 100% !important;
-    /* Altura visible real en móvil (evita que el input quede fuera) */
-    height: 100vh !important;
-    height: 100dvh !important;
-    max-height: 100vh !important;
-    max-height: 100dvh !important;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
     border-radius: 0;
     border: none;
-    box-sizing: border-box;
-    overflow: hidden !important;
-    display: flex !important;
-    flex-direction: column !important;
   }
 
-  .chatbot-header {
-    flex-shrink: 0 !important;
-    padding-top: max(16px, env(safe-area-inset-top, 0));
-  }
-
+  /* Para que el input quede visible: el área de mensajes debe poder encogerse */
   .chatbot-messages {
-    flex: 1 1 0 !important;
-    min-height: 0 !important;
-    overflow-y: auto !important;
-  }
-
-  .chatbot-input-container {
-    flex-shrink: 0 !important;
-    padding-bottom: max(16px, env(safe-area-inset-bottom, 0));
-    padding-left: max(20px, env(safe-area-inset-left, 0));
-    padding-right: max(20px, env(safe-area-inset-right, 0));
+    min-height: 0;
   }
 }
