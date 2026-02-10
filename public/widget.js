@@ -41,6 +41,10 @@
     }
   });
 
+  // Elementos de la burbuja
+  const attentionBubble = document.getElementById('attention-bubble');
+  const bubbleClose = attentionBubble?.querySelector('.bubble-close');
+
   // Inicialización
   init();
 
@@ -83,6 +87,57 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && isOpen) closeChat();
     });
+    
+    // Burbuja de atención
+    initAttentionBubble();
+  }
+  
+  function initAttentionBubble() {
+    if (!attentionBubble) return;
+    
+    // Verificar si ya se mostró hoy
+    const lastShown = localStorage.getItem('chatbot_bubble_shown');
+    const today = new Date().toDateString();
+    
+    if (lastShown === today) {
+      attentionBubble.style.display = 'none';
+      return;
+    }
+    
+    // Mostrar después de 2 segundos
+    setTimeout(() => {
+      attentionBubble.style.display = 'flex';
+    }, 2000);
+    
+    // Ocultar después de 6 segundos
+    setTimeout(() => {
+      hideBubble();
+    }, 8000);
+    
+    // Cerrar con botón X
+    if (bubbleClose) {
+      bubbleClose.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideBubble();
+      });
+    }
+    
+    // Cerrar al hacer click en la burbuja (abre el chat)
+    attentionBubble.addEventListener('click', () => {
+      hideBubble();
+      if (!isOpen) openChat();
+    });
+  }
+  
+  function hideBubble() {
+    if (!attentionBubble) return;
+    attentionBubble.classList.add('hidden');
+    localStorage.setItem('chatbot_bubble_shown', new Date().toDateString());
+    
+    // Remover del DOM después de la animación
+    setTimeout(() => {
+      attentionBubble.style.display = 'none';
+    }, 300);
   }
 
   function applyConfig(cfg) {
