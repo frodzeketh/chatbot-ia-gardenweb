@@ -613,4 +613,9 @@ html, body {
   .chatbot-messages {
     min-height: 0;
   }
+
+  /* Input por encima de la barra de URL / UI del navegador en iOS */
+  .chatbot-input-container {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 56px);
+  }
 }
