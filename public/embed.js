@@ -82,18 +82,39 @@
     img.style.cssText = 'width:100%!important;height:100%!important;object-fit:contain!important;pointer-events:none!important;';
     toggleBtn.appendChild(img);
 
-    // Iframe SOLO para la ventana del chat (tamaño fijo, no pantalla completa)
+    // Iframe SOLO para la ventana del chat (desktop: 360x500; responsive: pantalla completa)
     const iframe = document.createElement('iframe');
     iframe.id = 'chatbot-widget-frame';
     iframe.src = baseUrl + '/widget.html';
+    const MOBILE_BREAKPOINT = 480;
+    function applyIframeResponsive() {
+      const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
+      if (isMobile) {
+        iframe.style.top = '0';
+        iframe.style.left = '0';
+        iframe.style.right = '0';
+        iframe.style.bottom = '0';
+        iframe.style.width = '100vw';
+        iframe.style.height = '100vh';
+        iframe.style.maxWidth = 'none';
+        iframe.style.maxHeight = 'none';
+        iframe.style.borderRadius = '0';
+        iframe.style.boxShadow = 'none';
+      } else {
+        iframe.style.top = 'auto';
+        iframe.style.left = 'auto';
+        iframe.style.right = '24px';
+        iframe.style.bottom = '24px';
+        iframe.style.width = '360px';
+        iframe.style.height = '500px';
+        iframe.style.maxWidth = 'calc(100vw - 32px)';
+        iframe.style.maxHeight = 'calc(100vh - 100px)';
+        iframe.style.borderRadius = '20px';
+        iframe.style.boxShadow = '0 8px 30px rgba(0,0,0,0.08)';
+      }
+    }
     iframe.style.cssText = `
       position: fixed !important;
-      bottom: 24px !important;
-      right: 24px !important;
-      width: 360px !important;
-      height: 500px !important;
-      max-width: calc(100vw - 32px) !important;
-      max-height: calc(100vh - 100px) !important;
       border: none !important;
       background: transparent !important;
       pointer-events: auto !important;
@@ -101,12 +122,12 @@
       margin: 0 !important;
       padding: 0 !important;
       display: none !important;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.08) !important;
-      border-radius: 20px !important;
     `;
+    applyIframeResponsive();
     iframe.setAttribute('allowtransparency', 'true');
     iframe.setAttribute('frameborder', '0');
     iframe.setAttribute('scrolling', 'no');
+    window.addEventListener('resize', applyIframeResponsive);
 
     container.appendChild(toggleBtn);
     container.appendChild(iframe);

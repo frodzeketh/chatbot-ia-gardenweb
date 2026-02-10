@@ -217,6 +217,11 @@
     container.classList.add('open');
     input.focus();
     notifyParent();
+    // Ir al final de la conversación al abrir (sobre todo tras recargar)
+    requestAnimationFrame(function() {
+      scrollToBottom();
+      requestAnimationFrame(scrollToBottom);
+    });
   }
 
   function closeChat() {
