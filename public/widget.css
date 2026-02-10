@@ -584,11 +584,22 @@ html, body {
   display: none;
 }
 
-/* Responsive móvil - solo interfaz del chat al abrirlo */
+/* Responsive móvil - Android / iOS */
 @media (max-width: 400px) {
+  html, body {
+    height: 100dvh;
+    min-height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
+  }
+
   .chatbot-container {
-    bottom: 16px;
-    right: 16px;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
   }
 
   .chatbot-toggle {
@@ -599,26 +610,34 @@ html, body {
   .chatbot-window {
     top: 0;
     bottom: 0;
-    right: 0;
     left: 0;
+    right: 0;
     width: 100%;
     height: 100%;
-    max-height: 100%;
+    min-height: 0;
+    max-height: 100dvh;
     border-radius: 0;
     border: none;
+    box-sizing: border-box;
+    overflow: hidden;
+    touch-action: pan-y;
   }
 
-  /* Para que el input quede visible: el área de mensajes debe poder encogerse */
   .chatbot-messages {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
   }
 
-  /* Asegurar que el input siempre quede visible abajo */
+  .chatbot-header {
+    padding-top: max(16px, env(safe-area-inset-top, 0));
+    flex-shrink: 0;
+  }
+
   .chatbot-input-container {
     flex-shrink: 0;
-    position: relative;
-    z-index: 1;
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0));
+    padding-left: max(20px, env(safe-area-inset-left, 0));
+    padding-right: max(20px, env(safe-area-inset-right, 0));
   }
 }

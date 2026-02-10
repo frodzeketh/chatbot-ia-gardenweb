@@ -96,6 +96,7 @@
         iframe.style.bottom = '0';
         iframe.style.width = '100vw';
         iframe.style.height = '100vh';
+        iframe.style.height = '100dvh';
         iframe.style.maxWidth = 'none';
         iframe.style.maxHeight = 'none';
         iframe.style.borderRadius = '0';
@@ -140,8 +141,16 @@
     let startX, startY, initialX, initialY;
     let buttonHidden = false;
 
+    let savedScrollY = 0;
     function showChat() {
       chatOpen = true;
+      savedScrollY = window.scrollY || window.pageYOffset;
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+      document.body.style.position = 'fixed';
+      document.body.style.left = '0';
+      document.body.style.right = '0';
+      document.body.style.top = -savedScrollY + 'px';
       iframe.style.display = 'block';
       toggleBtn.style.display = 'none';
       iframe.contentWindow && iframe.contentWindow.postMessage({ type: 'chatbot-open' }, '*');
@@ -149,6 +158,13 @@
 
     function hideChat() {
       chatOpen = false;
+      document.documentElement.style.overflow = '';
+      document.body.style.overflow = '';
+      document.body.style.position = '';
+      document.body.style.left = '';
+      document.body.style.right = '';
+      document.body.style.top = '';
+      window.scrollTo(0, savedScrollY);
       iframe.style.display = 'none';
       if (!buttonHidden) toggleBtn.style.display = 'flex';
       iframe.contentWindow && iframe.contentWindow.postMessage({ type: 'chatbot-close' }, '*');
