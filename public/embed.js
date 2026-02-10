@@ -39,12 +39,12 @@
     container.id = 'chatbot-widget-wrapper';
     container.style.cssText = `
       position: fixed !important;
-      bottom: 0 !important;
+      top: 0 !important;
+      left: 0 !important;
       right: 0 !important;
-      width: 420px !important;
-      height: 580px !important;
-      max-width: 100vw !important;
-      max-height: 100vh !important;
+      bottom: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
       z-index: 2147483647 !important;
       pointer-events: none !important;
       border: none !important;
@@ -81,24 +81,6 @@
         config: options
       }, '*');
     };
-
-    // Responsive
-    function handleResize() {
-      if (window.innerWidth <= 400) {
-        container.style.width = '100%';
-        container.style.height = '100%';
-        container.style.left = '0';
-        container.style.right = '0';
-      } else {
-        container.style.width = '420px';
-        container.style.height = '580px';
-        container.style.right = '0';
-        container.style.left = 'auto';
-      }
-    }
-
-    window.addEventListener('resize', handleResize);
-    handleResize();
 
     return iframe;
   }
