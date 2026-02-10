@@ -201,6 +201,11 @@
     if (cfg.primaryColor) {
       document.documentElement.style.setProperty('--primary', cfg.primaryColor);
     }
+    if (cfg.externalButton) {
+      if (toggleBtn) toggleBtn.style.display = 'none';
+      if (attentionBubble) attentionBubble.style.display = 'none';
+      if (container) container.classList.add('external-button');
+    }
   }
 
   function toggleChat() {
