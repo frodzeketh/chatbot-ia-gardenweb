@@ -12,6 +12,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const ARTICULOS_API_URL = (process.env.ARTICULOS_API_URL || '').replace(/\/$/, '');
 const ARTICULOS_API_KEY = (process.env.ARTICULOS_API_KEY || '').trim();
 const usePrestaShopDirect = !!(ARTICULOS_API_URL && ARTICULOS_API_KEY);
+// NOTA: ARTICULOS_API_BASE (ej. 127.0.0.1:5001) no se usa en este servidor. Los productos se cargan desde PrestaShop con ARTICULOS_API_URL + ARTICULOS_API_KEY.
 
 function prestaShopAuth() {
   return { Authorization: 'Basic ' + Buffer.from(ARTICULOS_API_KEY + ':').toString('base64') };
@@ -420,8 +421,8 @@ async function fetchProductsFromPrestaShop() {
     console.log(`✅ PrestaShop: ${list.length} productos, ${stockEntries} con stock en API → ${productsCache.length} disponibles (${stockInfo}), ${withImage} con imagen`);
     return productsCache;
   } catch (e) {
-    console.warn('⚠️  PrestaShop no disponible:', e.message);
-    console.warn('   Comprueba ARTICULOS_API_URL y ARTICULOS_API_KEY en .env');
+    console.warn('⚠️  PrestaShop no disponible:', e.message || e);
+    console.warn('   Comprueba ARTICULOS_API_URL y ARTICULOS_API_KEY en .env. En servidor: que la URL sea accesible (no uses 127.0.0.1).');
     return productsCache.length ? productsCache : [];
   }
 }
@@ -475,12 +476,19 @@ function formatProductForTool(p) {
 
 // Precarga de cache al arranque y log de resumen (sin gastar tokens en chat)
 if (usePrestaShopDirect) {
+  console.log(`📦 Artículos: PrestaShop directo → ${ARTICULOS_API_URL ? ARTICULOS_API_URL.replace(/\/api\/?$/, '') + '/api' : '(vacío)'}`);
   ensureProductsCache()
     .then((list) => {
       const conImagen = (list || []).filter((p) => p.image_url).length;
       console.log(`📊 Artículos al iniciar: ${(list || []).length} disponibles, ${conImagen} con imagen`);
     })
-    .catch((e) => console.warn('⚠️ Precarga cache:', e.message));
+    .catch((e) => {
+      console.warn('⚠️ Precarga cache fallida:', e.message || e);
+      console.warn('   Comprueba en el servidor: ARTICULOS_API_URL, ARTICULOS_API_KEY y que pueda conectar a la URL (red/firewall).');
+    });
+} else {
+  console.warn('⚠️ Artículos: NO configurado. Faltan ARTICULOS_API_URL y/o ARTICULOS_API_KEY en .env → buscar_productos devolverá 0 resultados.');
+  console.warn('   En el servidor, configura .env con ARTICULOS_API_URL=https://www.plantasdehuerto.com/api y ARTICULOS_API_KEY=tu_ws_key');
 }
 
 // ============================================
