@@ -268,9 +268,12 @@
     };
 
     window.addEventListener('message', function(event) {
-      if (!event.data || event.data.type !== 'chatbot-state') return;
-      if (event.data.isOpen === false) {
+      if (!event.data) return;
+      if (event.data.type === 'chatbot-state' && event.data.isOpen === false) {
         hideChat();
+      }
+      if (event.data.type === 'chatbot-open-url' && event.data.url) {
+        try { window.open(event.data.url, '_blank', 'noopener,noreferrer'); } catch (err) {}
       }
     });
 

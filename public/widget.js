@@ -91,7 +91,23 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && isOpen) closeChat();
     });
-    
+
+    // Enlaces del chat: abrir en nueva pestaña (en embed, avisar al padre para evitar bloqueos)
+    if (messagesContainer) {
+      messagesContainer.addEventListener('click', function(e) {
+        const a = e.target.closest('a[href^="http"]');
+        if (!a || !a.href) return;
+        const url = (a.getAttribute('href') || a.href).trim();
+        if (!url || url === '#') return;
+        e.preventDefault();
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: 'chatbot-open-url', url: url }, '*');
+        } else {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        }
+      });
+    }
+
     // Burbuja de atención
     initAttentionBubble();
   }
@@ -109,7 +125,7 @@
         // Añadir cada mensaje del historial
         data.messages.forEach(msg => {
           const type = msg.role === 'user' ? 'user' : 'bot';
-          addHistoryMessage(msg.content, type, msg.timestamp);
+          addHistoryMessage(msg.content, type, msg.timestamp, msg.products);
         });
         
         // Scroll al final
@@ -120,12 +136,11 @@
     }
   }
   
-  // Añadir mensaje del historial (con timestamp guardado)
-  function addHistoryMessage(text, type, timestamp) {
+  // Añadir mensaje del historial (con timestamp y products para reconstruir cards con imagen)
+  function addHistoryMessage(text, type, timestamp, products) {
     const div = document.createElement('div');
     div.className = `message ${type}-message`;
     
-    // Usar timestamp guardado o actual
     let time;
     if (timestamp) {
       const date = new Date(timestamp);
@@ -134,8 +149,10 @@
       time = formatTime(new Date());
     }
     
-    // Usar markdown para bot, escape para usuario
-    const content = type === 'bot' ? renderMarkdown(text) : escapeHtml(text);
+    let content = type === 'bot' ? renderMarkdown(text) : escapeHtml(text);
+    if (type === 'bot' && products && products.length > 0) {
+      content = injectProductImagesIntoHtml(content, products);
+    }
     
     div.innerHTML = `
       <div class="message-bubble">
@@ -201,11 +218,6 @@
     if (cfg.primaryColor) {
       document.documentElement.style.setProperty('--primary', cfg.primaryColor);
     }
-    if (cfg.externalButton) {
-      if (toggleBtn) toggleBtn.style.display = 'none';
-      if (attentionBubble) attentionBubble.style.display = 'none';
-      if (container) container.classList.add('external-button');
-    }
   }
 
   function toggleChat() {
@@ -217,11 +229,6 @@
     container.classList.add('open');
     input.focus();
     notifyParent();
-    // Ir al final de la conversación al abrir (sobre todo tras recargar)
-    requestAnimationFrame(function() {
-      scrollToBottom();
-      requestAnimationFrame(scrollToBottom);
-    });
   }
 
   function closeChat() {
@@ -267,7 +274,7 @@
       typingEl.remove();
 
       if (response.ok) {
-        addMessage(data.message, 'bot');
+        addMessage(data.message, 'bot', data.products);
         // Actualizar deviceId si el servidor lo devuelve diferente
         if (data.deviceId && data.deviceId !== deviceId) {
           deviceId = data.deviceId;
@@ -277,21 +284,23 @@
         addMessage(data.error || 'Error al procesar el mensaje.', 'bot');
       }
     } catch (error) {
-      console.error('Error en fetch:', error);
+      console.error('Chatbot fetch error:', error.message || error, '→ URL:', API_BASE + '/api/chat');
       typingEl.remove();
-      addMessage('Error de conexión. Por favor, verifica tu internet.', 'bot');
+      addMessage('Error de conexión. Comprueba que el servidor esté en marcha y que la URL sea correcta (consola del navegador para más detalle).', 'bot');
     }
 
     input.focus();
   }
 
-  function addMessage(text, type) {
+  function addMessage(text, type, products) {
     const div = document.createElement('div');
     div.className = `message ${type}-message`;
     
     const time = formatTime(new Date());
-    // Usar markdown para bot, escape para usuario
-    const content = type === 'bot' ? renderMarkdown(text) : escapeHtml(text);
+    let content = type === 'bot' ? renderMarkdown(text) : escapeHtml(text);
+    if (type === 'bot' && products && products.length > 0) {
+      content = injectProductImagesIntoHtml(content, products);
+    }
     
     div.innerHTML = `
       <div class="message-bubble">
@@ -302,6 +311,63 @@
 
     messagesContainer.appendChild(div);
     scrollToBottom();
+  }
+
+  // Card de producto: imagen arriba, borde, denominación (15 chars), stock, ref, precio, borde, ver producto
+  function buildProductCard(p) {
+    const base = (API_BASE || window.location.origin).replace(/\/$/, '');
+    const imgSrc = (p.imageId && p.id)
+      ? base + '/api/articulos/image/' + encodeURIComponent(p.id) + '/' + encodeURIComponent(p.imageId)
+      : '';
+    const fullName = (p.name || '').trim().replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const name = fullName.length > 15 ? fullName.slice(0, 15) + '…' : fullName;
+    const price = p.price || 'Consultar';
+    const stock = p.stock != null && p.stock !== '' ? String(p.stock) : 'Consultar';
+    const ref = p.reference || '—';
+    const url = (p.product_url || '').trim() || 'https://plantasdehuerto.com/';
+    const imgHtml = imgSrc
+      ? '<div class="product-card-image"><img src="' + imgSrc + '" alt="" loading="lazy" onerror="this.parentElement.style.display=\'none\'"></div>'
+      : '';
+    return '<div class="product-card">' +
+      imgHtml +
+      '<div class="product-card-border"></div>' +
+      '<div class="product-card-body">' +
+      '<div class="product-card-title">' + name + '</div>' +
+      '<div class="product-card-row">Stock: ' + stock + '</div>' +
+      '<div class="product-card-row">Referencia: ' + ref + '</div>' +
+      '<div class="product-card-row">Precio: ' + price + '</div>' +
+      '<div class="product-card-border"></div>' +
+      '<a href="' + url.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener noreferrer" class="product-card-link">Ver producto</a>' +
+      '</div></div>';
+  }
+
+  function injectProductImagesIntoHtml(html, products) {
+    if (!products || products.length === 0) return html;
+    const base = (API_BASE || window.location.origin).replace(/\/$/, '');
+    for (let i = products.length - 1; i >= 0; i--) {
+      const p = products[i];
+      const namePrefix = (p.name || '').trim().slice(0, 22);
+      if (!namePrefix) continue;
+      const nameIdx = html.toLowerCase().indexOf(namePrefix.toLowerCase());
+      if (nameIdx === -1) continue;
+      const startIdx = Math.max(html.lastIndexOf('<p>', nameIdx), html.lastIndexOf('<p ', nameIdx));
+      if (startIdx === -1) continue;
+      const firstPEnd = html.indexOf('</p>', nameIdx);
+      if (firstPEnd === -1) continue;
+      const endIdx = html.indexOf('</p>', firstPEnd + 4);
+      const blockEnd = endIdx !== -1 ? endIdx + 4 : firstPEnd + 4;
+      const cardHtml = buildProductCard({
+        id: p.id,
+        imageId: p.imageId,
+        name: p.name,
+        price: p.price,
+        stock: p.stock,
+        reference: p.reference,
+        product_url: p.product_url
+      });
+      html = html.slice(0, startIdx) + cardHtml + html.slice(blockEnd);
+    }
+    return html;
   }
 
   function showTyping() {
@@ -345,6 +411,12 @@
       // Fallback si marked no cargó
       html = text.replace(/\n/g, '<br>');
     }
+    
+    // Imágenes del chat: resolver /api/articulos/image/ y /api/chat/image/ con API_BASE + clase y onerror (ocultar si falla)
+    const base = (API_BASE || window.location.origin).replace(/\/$/, '');
+    html = html.replace(/<img([^>]*)\ssrc="(\/api\/(?:articulos|chat)\/image\/[^"]+)"/gi, (_, attrs, path) => {
+      return '<img' + attrs + ' class="chat-product-img" src="' + base + path + '" loading="lazy" onerror="this.style.display=\'none\'"';
+    });
     
     // Envolver tablas en contenedor scrollable
     html = html.replace(/<table>/g, '<div class="table-wrapper"><table>');

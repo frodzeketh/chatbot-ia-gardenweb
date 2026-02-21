@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prueba imágenes artículos</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 16px; background: #f5f5f5; }
+    h1 { font-size: 1.25rem; color: #333; }
+    .error { color: #c00; padding: 8px; background: #fee; border-radius: 6px; margin-bottom: 12px; }
+    .loading { color: #666; padding: 12px; }
+    table { border-collapse: collapse; width: 100%; max-width: 900px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); border-radius: 8px; overflow: hidden; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #4A7C59; color: #fff; font-weight: 600; }
+    .articulos-cell-img { width: 80px; }
+    .articulos-product-img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; display: block; }
+    .articulos-no-img { color: #999; font-size: 0.9rem; }
+    .articulos-link-producto { color: #4A7C59; text-decoration: none; }
+    .articulos-link-producto:hover { text-decoration: underline; }
+    .back { display: inline-block; margin-bottom: 12px; color: #4A7C59; text-decoration: none; }
+    .back:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← Volver al inicio</a>
+  <h1>Prueba imágenes de artículos (mismo enfoque que el panel React)</h1>
+  <p>Listado desde <code>GET /api/articulos/products</code>. Imágenes desde <code>/api/articulos/image/:id/:imageId</code>.</p>
+  <p><strong>Recomendado:</strong> abre esta página desde el servidor Node → <a href="http://localhost:3000/test-imagenes.html">http://localhost:3000/test-imagenes.html</a> (con <code>node server.js</code> en marcha). Si la abres desde otro puerto (ej. 5500), las peticiones se envían al puerto 3000.</p>
+  <div id="error" class="error" style="display: none;"></div>
+  <div id="loading" class="loading">Cargando artículos...</div>
+  <div id="table-wrap" style="display: none;">
+    <table class="articulos-table">
+      <thead>
+        <tr>
+          <th class="articulos-th-img">Imagen</th>
+          <th>Referencia</th>
+          <th>Denominación</th>
+          <th>Precio</th>
+          <th>Stock</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <script>
+    (function() {
+      const tbody = document.getElementById('tbody');
+      const loadingEl = document.getElementById('loading');
+      const tableWrap = document.getElementById('table-wrap');
+      const errorEl = document.getElementById('error');
+      // La API está en el servidor Node (puerto 3000). Si abres desde otro puerto (ej. 5500 Live Server), usar 3000.
+      const origin = window.location.origin;
+      const base = (origin.includes(':5500') || origin.includes(':8080')) 
+        ? origin.replace(/:(\d+)$/, ':3000') 
+        : origin;
+
+      function showError(msg) {
+        errorEl.textContent = msg;
+        errorEl.style.display = 'block';
+        loadingEl.style.display = 'none';
+      }
+
+      function formatPrecio(val) {
+        if (val == null || val === '') return '—';
+        const n = typeof val === 'number' ? val : parseFloat(String(val).replace(',', '.'));
+        if (Number.isNaN(n)) return '—';
+        return n.toFixed(2).replace('.', ',') + ' €';
+      }
+
+      fetch(base + '/api/articulos/products')
+        .then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(function(articulos) {
+          loadingEl.style.display = 'none';
+          if (!articulos || articulos.length === 0) {
+            showError('No hay artículos o el backend no está conectado a PrestaShop.');
+            return;
+          }
+          tableWrap.style.display = 'block';
+          tbody.innerHTML = articulos.map(function(a, i) {
+            const imgSrc = a.imageId != null
+              ? base + '/api/articulos/image/' + encodeURIComponent(a.id) + '/' + encodeURIComponent(a.imageId)
+              : '';
+            const imgHtml = a.imageId != null
+              ? '<img src="' + imgSrc + '" alt="" class="articulos-product-img" loading="lazy" onerror="this.style.display=\'none\'; var s=this.nextElementSibling; if(s) s.style.display=\'inline\';">'
+              : '';
+            const linkProducto = (a.linkProducto && a.linkProducto.trim()) ? a.linkProducto : '';
+            const nombre = (a.denominacion || '—').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const nombreCell = linkProducto
+              ? '<a href="' + linkProducto.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener noreferrer" class="articulos-link-producto">' + nombre + '</a>'
+              : nombre;
+            return '<tr>' +
+              '<td class="articulos-cell-img">' + imgHtml + '<span class="articulos-no-img" style="display:' + (a.imageId != null ? 'none' : 'inline') + '">—</span></td>' +
+              '<td>' + (a.reference || '—') + '</td>' +
+              '<td>' + nombreCell + '</td>' +
+              '<td>' + formatPrecio(a.precioFinal) + '</td>' +
+              '<td>' + (a.stock != null ? a.stock : '—') + '</td>' +
+              '</tr>';
+          }).join('');
+        })
+        .catch(function(e) {
+          showError('Error: ' + (e.message || 'No se pudieron cargar los artículos.'));
+        });
+    })();
+  </script>
+</body>
+</html>

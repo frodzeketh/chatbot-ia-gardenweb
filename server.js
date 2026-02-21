@@ -3,15 +3,72 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const OpenAI = require('openai');
-const { Pinecone } = require('@pinecone-database/pinecone');
 const admin = require('firebase-admin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-const INDEX_NAME = process.env.PINECONE_INDEX || 'products';
+const ARTICULOS_API_URL = (process.env.ARTICULOS_API_URL || '').replace(/\/$/, '');
+const ARTICULOS_API_KEY = (process.env.ARTICULOS_API_KEY || '').trim();
+const usePrestaShopDirect = !!(ARTICULOS_API_URL && ARTICULOS_API_KEY);
+
+function prestaShopAuth() {
+  return { Authorization: 'Basic ' + Buffer.from(ARTICULOS_API_KEY + ':').toString('base64') };
+}
+
+function prestaShopQuery(extra = '') {
+  const q = 'output_format=JSON' + (extra ? '&' + extra : '');
+  return ARTICULOS_API_KEY ? q + '&ws_key=' + encodeURIComponent(ARTICULOS_API_KEY) : q;
+}
+
+function prestaShopQueryImage() {
+  return ARTICULOS_API_KEY ? 'ws_key=' + encodeURIComponent(ARTICULOS_API_KEY) : '';
+}
+
+// ============================================
+// IVA por id_tax_rules_group (precio exacto como en la web)
+// ============================================
+const IVA_MAP_DEFAULT = {
+  '0': 21, '1': 21, '2': 10, '3': 4, '4': 20, '5': 10, '6': 5.5, '7': 2.1, '8': 20, '9': 21,
+  '10': 20, '11': 19, '12': 21, '13': 19, '14': 25, '15': 20, '16': 24, '17': 20, '18': 24, '19': 25,
+  '20': 27, '21': 23, '22': 22, '23': 21, '24': 17, '25': 21, '26': 18, '27': 21, '28': 23, '29': 23,
+  '30': 19, '31': 25, '32': 22, '33': 20
+};
+
+function getIvaMap() {
+  try {
+    const raw = process.env.ARTICULOS_IVA_MAP;
+    if (!raw) return IVA_MAP_DEFAULT;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const map = { ...IVA_MAP_DEFAULT };
+      Object.keys(parsed).forEach((k) => {
+        const v = Number(parsed[k]);
+        if (!Number.isNaN(v)) map[String(k)] = v;
+      });
+      return map;
+    }
+  } catch (_) {}
+  return IVA_MAP_DEFAULT;
+}
+
+const IVA_MAP = getIvaMap();
+
+/** Precio con IVA incluido: usa price_tax_incl si existe; si no, precio × (1 + IVA%) según id_tax_rules_group. */
+function getPriceTaxIncl(raw) {
+  const taxIncl = raw.price_tax_incl;
+  if (taxIncl != null) {
+    const n = Number(taxIncl);
+    if (!Number.isNaN(n)) return n;
+  }
+  const price = raw.price != null ? Number(raw.price) : NaN;
+  if (Number.isNaN(price)) return null;
+  const group = raw.id_tax_rules_group != null ? String(raw.id_tax_rules_group) : '';
+  const ivaPercent = IVA_MAP[group];
+  if (ivaPercent == null) return null;
+  return Math.round(price * (1 + ivaPercent / 100) * 100) / 100;
+}
 
 // ============================================
 // FIREBASE ADMIN - Inicialización segura
@@ -119,22 +176,312 @@ async function saveConversationToDB(deviceId, messages) {
 }
 
 // ============================================
-// PINECONE
+// API ARTÍCULOS – Cache en memoria, datos en tiempo real
 // ============================================
-let pineconeIndex = null;
+let productsCache = [];
+let productsCacheTime = 0;
+const CACHE_TTL_MS = (Number(process.env.ARTICULOS_CACHE_TTL_SEC) || 300) * 1000; // 5 min por defecto
 
-async function initPinecone() {
-  if (process.env.PINECONE_API_KEY && INDEX_NAME) {
-    try {
-      pineconeIndex = pc.index(INDEX_NAME);
-      const stats = await pineconeIndex.describeIndexStats();
-      console.log(`✅ Pinecone: ${stats.totalRecordCount} productos`);
-    } catch (e) {
-      console.error('❌ Pinecone:', e.message);
+function getProductName(p) {
+  const n = p.name;
+  if (!n) return '';
+  if (typeof n === 'string') return n.trim();
+  const arr = Array.isArray(n) ? n : (n.language || n);
+  if (!Array.isArray(arr) || arr.length === 0) return '';
+  const es = arr.find((x) => x.id === '1' || x.id === 1);
+  const first = arr[0];
+  const item = es || first;
+  return (item && item.value) ? String(item.value).trim() : '';
+}
+
+/** Extrae texto de un campo multilenguaje (description_short, description). String, o { language: [ { id, value } ] }, o { value / "#" }. */
+function getMultilangText(raw, fieldName) {
+  const f = raw[fieldName];
+  if (f == null) return '';
+  let text = '';
+  if (typeof f === 'string') text = f;
+  else if (typeof f === 'object') {
+    const direct = f['#'] ?? f['@value'] ?? f.value;
+    if (direct != null) text = String(direct);
+    else {
+      const lang = f.language || (Array.isArray(f) ? f : null);
+      const list = Array.isArray(lang) ? lang : (lang ? [lang] : []);
+      const es = list.find((x) => x && (String(x.id) === '1'));
+      const first = list[0];
+      const item = es || first;
+      const val = item && (item.value ?? item['#'] ?? item['@value']);
+      text = val != null ? String(val) : '';
     }
   }
+  return text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
 }
-initPinecone();
+
+function normalizeProduct(raw, imageUrlFromApi) {
+  const name = getProductName(raw);
+  const priceTaxIncl = raw.price_tax_incl != null ? Number(raw.price_tax_incl) : null;
+  const price = raw.price != null ? Number(raw.price) : null;
+  const productUrl = raw.product_url ? String(raw.product_url).trim() : '';
+  const imageUrl = imageUrlFromApi || (raw.image_url || raw.image || raw.image_link || '').trim();
+  const descShort = getMultilangText(raw, 'description_short');
+  const descLong = getMultilangText(raw, 'description');
+  const description = descShort || descLong || '';
+  return {
+    id: raw.id,
+    reference: raw.reference ? String(raw.reference) : '',
+    name,
+    description,
+    price_tax_incl: priceTaxIncl,
+    price,
+    product_url: productUrl,
+    image_url: imageUrl,
+    stock: null
+  };
+}
+
+/** Extrae valor de campo que la API puede devolver como número, string u objeto (ej. {"#": "1"}). */
+function extractValue(field) {
+  if (field == null) return null;
+  if (typeof field === 'number' && !Number.isNaN(field)) return String(field);
+  if (typeof field === 'string') return field;
+  if (typeof field === 'object') {
+    const v = field['#'] ?? field['@value'] ?? field.value;
+    if (v != null) return String(v);
+    const lang = field.language;
+    if (lang) {
+      const first = Array.isArray(lang) ? lang[0] : lang;
+      const x = first?.['#'] ?? first?.['@value'] ?? first?.value;
+      if (x != null) return String(x);
+    }
+  }
+  return null;
+}
+
+function parsePrestaShopProducts(data) {
+  if (!data) return [];
+  const root = data.products || data.product;
+  if (!root) return [];
+  const arr = Array.isArray(root)
+    ? root
+    : (root.product ? (Array.isArray(root.product) ? root.product : [root.product]) : [root]);
+  return arr;
+}
+
+/** Recorre el árbol y recoge cualquier objeto que tenga id_product (PrestaShop: a veces array en stock_available, a veces objeto con claves numéricas). */
+function flattenStockCandidates(obj, out, depth) {
+  if (depth > 5) return;
+  if (!obj || typeof obj !== 'object') return;
+  if (Array.isArray(obj)) {
+    obj.forEach((item) => flattenStockCandidates(item, out, depth + 1));
+    return;
+  }
+  const hasIdProduct = obj.id_product !== undefined || obj.id_product != null;
+  if (hasIdProduct) {
+    out.push(obj);
+    return;
+  }
+  Object.values(obj).forEach((v) => flattenStockCandidates(v, out, depth + 1));
+}
+
+function parsePrestaShopStock(data) {
+  if (!data) return {};
+  const root = data.prestashop || data;
+  const s = root.stock_availables ?? root.stock_available;
+  if (!s) return {};
+  let candidates = [];
+  if (Array.isArray(s)) {
+    candidates = s;
+  } else if (s.stock_available != null) {
+    const inner = s.stock_available;
+    candidates = Array.isArray(inner) ? inner : Object.values(inner);
+  } else {
+    flattenStockCandidates(s, candidates, 0);
+  }
+  const map = {};
+  candidates.forEach((x) => {
+    if (!x || typeof x !== 'object') return;
+    const idProduct = extractValue(x.id_product) ?? (x.id_product != null ? String(x.id_product) : null);
+    if (idProduct == null || idProduct === '') return;
+    const qRaw = extractValue(x.quantity) ?? x.quantity;
+    const q = parseInt(String(qRaw ?? 0), 10);
+    const quantity = Number.isNaN(q) ? 0 : q;
+    map[idProduct] = (map[idProduct] || 0) + quantity;
+  });
+  return map;
+}
+
+// Lista de imágenes: GET images/products → id_product e id de cada imagen
+function parsePrestaShopProductImages(data) {
+  const map = {}; // id_product -> id_image (primera imagen del producto)
+  if (!data) return map;
+  const root = data.images || data.image;
+  if (!root) return map;
+  let arr = [];
+  if (Array.isArray(root)) arr = root;
+  else if (root.image) arr = Array.isArray(root.image) ? root.image : [root.image];
+  else if (typeof root === 'object') arr = Object.keys(root).map((k) => root[k]).filter(Boolean);
+  arr.forEach((img) => {
+    if (!img || typeof img !== 'object') return;
+    const idProduct = img.id_product != null ? String(img.id_product) : '';
+    const idImage = img.id != null ? String(img.id) : '';
+    if (idProduct && idImage && map[idProduct] == null) map[idProduct] = idImage;
+  });
+  return map;
+}
+
+async function fetchProductImagesMap() {
+  if (!usePrestaShopDirect) return {};
+  try {
+    const url = `${ARTICULOS_API_URL}/images/products?display=full&${prestaShopQuery()}`;
+    const res = await fetch(url, { headers: prestaShopAuth() });
+    if (!res.ok) return {};
+    const data = await res.json();
+    const map = parsePrestaShopProductImages(data);
+    console.log(`✅ PrestaShop imágenes: ${Object.keys(map).length} productos con imagen en lista`);
+    return map;
+  } catch (e) {
+    console.warn('⚠️  Lista imágenes PrestaShop:', e.message);
+    return {};
+  }
+}
+
+function getProductImageId(raw, imageMap) {
+  const id = (extractValue(raw.id) ?? (raw.id != null ? String(raw.id) : '')).toString();
+  if (!id) return '';
+  if (raw.id_default_image != null && String(raw.id_default_image)) return String(raw.id_default_image);
+  if (imageMap[id]) return imageMap[id];
+  const assoc = raw.associations || {};
+  const images = assoc.images || assoc.image;
+  const list = Array.isArray(images) ? images : images ? [images] : [];
+  const first = list[0];
+  return first && first.id != null ? String(first.id) : '';
+}
+
+/** Producto disponible en catálogo: active es "1" o 1 o true en PrestaShop. Si no viene el campo, se considera activo. */
+function isProductActive(raw) {
+  const a = extractValue(raw.active) ?? raw.active;
+  if (a === '0' || a === 0 || a === false) return false;
+  return true;
+}
+
+async function fetchProductsFromPrestaShop() {
+  if (!usePrestaShopDirect) return [];
+  try {
+    const [productsRes, stockRes, imageMap] = await Promise.all([
+      fetch(`${ARTICULOS_API_URL}/products?display=full&${prestaShopQuery()}`, { headers: prestaShopAuth() }),
+      fetch(`${ARTICULOS_API_URL}/stock_availables?display=full&${prestaShopQuery()}`, { headers: prestaShopAuth() }),
+      fetchProductImagesMap()
+    ]);
+    if (!productsRes.ok) throw new Error('Products ' + productsRes.status);
+    const productsData = await productsRes.json();
+    const stockData = stockRes.ok ? await stockRes.json() : {};
+    const list = parsePrestaShopProducts(productsData);
+    const stockMap = parsePrestaShopStock(stockData);
+    const stockEntries = Object.keys(stockMap).length;
+    if (list.length > 0 && stockEntries === 0) {
+      const claves = typeof stockData === 'object' && stockData !== null ? Object.keys(stockData).join(', ') : 'no es objeto';
+      const sa = stockData?.prestashop?.stock_availables ?? stockData?.stock_availables;
+      const raw = sa != null ? JSON.stringify(sa) : '';
+      const rawPreview = raw.length > 0 ? raw.slice(0, 1200) + (raw.length > 1200 ? '...' : '') : '(vacío)';
+      console.warn('⚠️  stock_availables: 0 entradas. Claves en respuesta:', claves);
+      console.warn('   Respuesta cruda (primeros 1200 caracteres):', rawPreview);
+    }
+    const shopBase = ARTICULOS_API_URL.replace(/\/api\/?$/, '');
+    productsCache = list.map((raw) => {
+      const id = (extractValue(raw.id) ?? (raw.id != null ? String(raw.id) : '')).toString();
+      const idImage = getProductImageId(raw, imageMap);
+      const imageUrl = id && idImage ? `/api/articulos/image/${id}/${idImage}` : '';
+      const productUrl = `${shopBase}/index.php?id_product=${id}&controller=product`;
+      const priceTaxIncl = getPriceTaxIncl(raw);
+      const rawMapped = {
+        id,
+        reference: raw.reference || '',
+        name: raw.name,
+        description_short: raw.description_short,
+        description: raw.description,
+        price: raw.price,
+        price_tax_incl: priceTaxIncl != null ? priceTaxIncl : raw.price_tax_incl,
+        product_url: productUrl
+      };
+      const p = normalizeProduct(rawMapped, imageUrl);
+      p.stock = stockMap[id] != null ? stockMap[id] : null;
+      p.active = isProductActive(raw);
+      if (idImage) p.imageId = idImage;
+      return p;
+    });
+    const hasStockData = Object.keys(stockMap).length > 0;
+    productsCache = productsCache.filter((p) => {
+      if (!p.name || !p.active) return false;
+      if (hasStockData) return p.stock != null && Number(p.stock) > 0;
+      return true;
+    });
+    productsCacheTime = Date.now();
+    const withImage = productsCache.filter((p) => p.image_url).length;
+    const stockInfo = hasStockData ? `activos + stock>0` : `activos (sin datos stock_availables)`;
+    console.log(`✅ PrestaShop: ${list.length} productos, ${stockEntries} con stock en API → ${productsCache.length} disponibles (${stockInfo}), ${withImage} con imagen`);
+    return productsCache;
+  } catch (e) {
+    console.warn('⚠️  PrestaShop no disponible:', e.message);
+    console.warn('   Comprueba ARTICULOS_API_URL y ARTICULOS_API_KEY en .env');
+    return productsCache.length ? productsCache : [];
+  }
+}
+
+async function ensureProductsCache() {
+  const now = Date.now();
+  if (productsCache.length === 0 || now - productsCacheTime > CACHE_TTL_MS) {
+    if (usePrestaShopDirect) await fetchProductsFromPrestaShop();
+  }
+  return productsCache;
+}
+
+function formatPrice(value) {
+  if (value == null || isNaN(value)) return '';
+  return `${Number(value).toFixed(2).replace('.', ',')} €`;
+}
+
+/** Normaliza para búsqueda: minúsculas y sin acentos (cipres coincide con ciprés). */
+function normalizeForSearch(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\u0300-\u036f/g, '')
+    .trim();
+}
+
+async function searchProductsFromAPI(term, soloWeb = false) {
+  await ensureProductsCache();
+  const t = normalizeForSearch(term || '');
+  if (!t) return productsCache.slice(0, 8);
+  const filtered = productsCache.filter((p) => {
+    const nameNorm = normalizeForSearch(p.name || '');
+    const refNorm = normalizeForSearch(p.reference || '');
+    const descNorm = normalizeForSearch(p.description || '');
+    return nameNorm.includes(t) || refNorm.includes(t) || (t.length >= 2 && descNorm.includes(t));
+  });
+  return filtered.slice(0, 8);
+}
+
+function formatProductForTool(p) {
+  const name = p.name || 'Sin nombre';
+  const priceStr = formatPrice(p.price_tax_incl) || formatPrice(p.price) || 'Consultar';
+  const url = p.product_url || 'https://plantasdehuerto.com/';
+  const image = p.image_url || '';
+  const stock = p.stock != null ? String(p.stock) : 'Consultar';
+  const ref = p.reference || '';
+  const desc = (p.description || '').slice(0, 280).replace(/\|/g, ' ');
+  return `${name} | ${priceStr} | ${url} | ${image} | ${stock} | ${ref} | ${desc}`;
+}
+
+// Precarga de cache al arranque y log de resumen (sin gastar tokens en chat)
+if (usePrestaShopDirect) {
+  ensureProductsCache()
+    .then((list) => {
+      const conImagen = (list || []).filter((p) => p.image_url).length;
+      console.log(`📊 Artículos al iniciar: ${(list || []).length} disponibles, ${conImagen} con imagen`);
+    })
+    .catch((e) => console.warn('⚠️ Precarga cache:', e.message));
+}
 
 // ============================================
 // PROMPT - CONCISO Y DIRECTO
@@ -142,9 +489,80 @@ initPinecone();
 const SYSTEM_PROMPT = `Eres vendedor experto de PlantasdeHuerto.com (vivero El Huerto Deitana, Totana, Murcia).
 Contacto: 968 422 335 | info@plantasdehuerto.com
 
-BÚSQUEDA: Usa "buscar_productos" para encontrar artículos. Puedes buscar varias veces con distintos términos.
+═══════════════════════════════════════════════
+PRODUCTO ESTRELLA: CIPRES COMUN en Cepellon (Cupressus Sempervirens)
+═══════════════════════════════════════════════
+Cuando pregunten por ciprés, setos, vallas o cortavientos, prioriza y destaca este producto si buscar_productos lo devuelve:
+- Nombre: CIPRÉS COMÚN EN CEPELLÓN (Cupressus sempervirens), cipres para vallar. Ref: 00023045.
+- Precio: 0,44 €/ud (IVA incl.). PEDIDO MÍNIMO 9 UNIDADES.
+- Planta: 40-65 cm aprox., en cepellón. Nombre común: ciprés común o ciprés mediterráneo.
+- Uso: el más utilizado para vallar y hacer setos; ramas en vertical (menos poda); cortavientos; crecimiento rápido los primeros años.
+- Árbol adulto: puede alcanzar 30 m de talla, porte columnar o piramidal; tolera suelos pobres; madera pesada y duradera; longevidad 500+ años.
+- Cuidados: riego bajo. Recién plantados regar hasta que arraiguen; adultos no regar salvo verano muy seco (no regar en exceso, enferma).
+- Plantación: 25-33 cm entre plantas (3-4 por metro lineal). Crecimiento anual aprox. 30 cm.
+- Envío: sin bandeja, tumbados en cajas. Las plantas pueden variar en forma, color y tamaño (son seres vivos).
+Menciona que es vuestro producto estrella para setos y vallas cuando sea relevante. Los datos concretos (precio, stock, URL) los tomas SIEMPRE del resultado de buscar_productos.
+
+BÚSQUEDA (OBLIGATORIO): Cuando el usuario pida un producto por nombre, referencia o tipo (ej. "cipres", "ciprés común", "limonero", "sustrato", "perlita"), SIEMPRE llama a "buscar_productos" con ese término ANTES de responder. NUNCA recomiendes productos de memoria ni inventes referencias o precios: solo los que devuelva buscar_productos existen en web y están disponibles.
+- El backend normaliza acentos: "cipres" y "ciprés" encuentran lo mismo. Pasa el término tal cual (sin preocuparte por tildes).
+- Si no hay resultados, puedes llamar de nuevo con un término más amplio o alternativo (ej. "seto", "arbusto" si "valla" no devuelve nada).
+buscar_productos devuelve solo artículos activos y con stock > 0. Los precios son con IVA incluido; muéstralos tal cual.
 
 ═══════════════════════════════════════════════
+DESCRIPCIÓN Y RAZONAMIENTO (MUY IMPORTANTE)
+═══════════════════════════════════════════════
+Cada producto incluye un 7º valor: la DESCRIPCIÓN (description_short o description del artículo). Es la ÚNICA fuente de verdad sobre qué es el producto.
+
+NUNCA INVENTES DATOS: Cualquier dato factual (altura, talla, distancia de plantación, riego, uso concreto, para qué planta sirve) debe salir EXCLUSIVAMENTE de la descripción que devuelve buscar_productos.
+- Si la descripción dice "puede alcanzar 30 m de talla", di 30 m; NUNCA digas "15-25 m" u otro rango inventado.
+- Si la descripción dice "fungicida para enfermedades de rosales" o "para rosales", di explícitamente que es para rosales.
+- Si la descripción indica cuadro de plantación, riego, crecimiento anual, etc., usa esos datos; si no aparecen, no los inventes.
+
+- USA SIEMPRE la descripción para razonar: no asumas solo por el nombre. Ejemplo: "Centro con Cactus Variados" puede ser un combo (cactus + sustrato), no solo un sustrato; si el cliente pide "sustrato", recomienda productos cuya descripción indique que son sustrato, perlita, compost, etc.
+- Recomienda en función de lo que dice la descripción (uso, tipo de planta, características), no solo del nombre.
+- Si un producto es combo o kit, dilo con naturalidad según la descripción (ej. "Es un pack que incluye...").
+- Mantén el contexto de la conversación: si el cliente pidió algo para una valla, recomienda en función de setos/arbustos y de lo que digan las descripciones.
+
+AL PRESENTAR CADA PRODUCTO: Indica brevemente QUÉ ES o PARA QUÉ SIRVE según la descripción, no solo el nombre comercial.
+- Ejemplo: si el nombre es "ENFERMEDADES RO..." y la descripción dice que es fungicida para rosales, escribe algo como "Fungicida para enfermedades de rosales" antes o junto a la card.
+- Ejemplo: si preguntan "a qué altura crece el ciprés común", responde con los datos exactos de la descripción (ej. "puede alcanzar 30 m de talla", "porte columnar o piramidal", "se usa en setos y como cortavientos").
+
+═══════════════════════════════════════════════
+CÓMO MOSTRAR PRODUCTOS (FORMATO SIMPLE)
+═══════════════════════════════════════════════
+ANTES DE CUALQUIER PRODUCTO: NUNCA empieces la respuesta con el producto. SIEMPRE escribe primero al menos UNA frase de introducción en texto plano (ej. "Claro, tenemos Limonero Eureka.", "Sí, aquí tienes el limonero que buscas.", "Tenemos ese producto en web."). El cliente debe ver siempre texto tuyo antes de la primera card.
+
+buscar_productos devuelve por cada producto: Nombre | Precio | URL_producto | URL_imagen | Stock | Ref | Descripción
+Cuando muestres un producto, escribe en markdown:
+- Si el nombre comercial no deja claro qué es o para qué sirve, añade UNA línea breve antes (ej. "Fungicida para enfermedades de rosales:", "Abono líquido para plantas de invierno con flor:") usando SOLO datos de la descripción.
+- Denominación en negrita
+- OBLIGATORIO: si URL_imagen no está vacía, incluye SIEMPRE esta línea justo debajo del nombre: ![nombre del producto](URL_imagen) usando la URL exacta del 4º valor (ruta /api/articulos/image/ID/IMAGEID). NUNCA inventes una URL de imagen: si el 4º valor viene vacío (entre barras ||), NO pongas ninguna línea de imagen.
+- Precio, Stock, Ref
+- Enlace: [Ver producto](URL_producto)
+Máximo 3 productos por mensaje. Sin formato [ARTICULO|...].
+Ejemplo (la imagen es obligatoria si buscar_productos devolvió URL de imagen):
+**LIMONERO EUREKA (4 estaciones)**
+![Limonero Eureka](/api/articulos/image/1614/123)
+Precio: 24,50 € · Stock: 17 · Ref: 00022876
+[Ver producto](https://www.plantasdehuerto.com/...)
+
+══════════════════════════════════════════════════════════════════
+DESPUÉS DE MOSTRAR PRODUCTOS: SIEMPRE ESCRIBE UN CIERRE (OBLIGATORIO)
+══════════════════════════════════════════════════════════════════
+Cuando hayas mostrado uno o más productos (cards), NUNCA termines solo con la frase intro. SIEMPRE escribe un párrafo o dos DESPUÉS de los productos que incluya:
+
+1. RAZONAMIENTO BREVE: Por qué encajan con lo que pidió (usa la descripción: "La coliflor y la acelga son de desarrollo invernal...", "La lechuga romana aguanta bien el frío...").
+2. IMPULSO: Invita a elegir o a comprar ("Puedes llevarte cualquiera de estos para empezar", "Si te animas con la lechuga, tenemos stock").
+3. SEGUIR CONVERSANDO: Una de estas (o varias):
+   - Cómo cuidar lo que recomiendas (riego, marco, época de siembra).
+   - Otras cosas que podría cultivar (complementos: abono, sustrato, macetas).
+   - Preguntas abiertas: "¿Sabes si quieres cultivar en bancal o en maceta?", "¿Conoces los tipos de lechuga?", "¿Quieres que te cuente cómo plantar la coliflor?".
+   - Ofrecer más búsquedas: "Si buscas algo más concreto (por ejemplo solo bulbos o solo abonos de invierno), dímelo."
+
+Ejemplo de cierre tras mostrar coliflores/lechugas/acelgas de invierno:
+"La coliflor, la acelga y la lechuga romana son clásicos de invierno: se desarrollan bien con frío y dan cosecha en esta época. Cualquiera de estos lotes te sirve para empezar. Si vas a plantar lechuga, ten en cuenta que la romana aguanta bien y puedes combinarla con otras verduras en el mismo bancal. ¿Quieres que te explique cómo cuidarlas o buscas también abono o sustrato para la temporada?"
+
+═══════════════════════════════
 TU OBJETIVO: VENDER Y AYUDAR AL CLIENTE
 ═══════════════════════════════════════════════
 
@@ -168,16 +586,15 @@ TU OBJETIVO: VENDER Y AYUDAR AL CLIENTE
    - Modo compra → ahí SÍ lista productos con precios
    - Conversación normal → párrafos naturales, sin viñetas
 
-4. MANTÉN EL CONTEXTO
-   - Recuerda lo que el cliente dijo antes
-   - Si habló de plantar en invierno y luego pregunta por perales, conecta: 
-     "Para plantar ahora en invierno, te recomiendo el Peral Conferencia que aguanta bien el frío..."
-   - Usa lo que sabes del cliente para personalizar
+4. MANTÉN EL CONTEXTO Y RAZONA CON LAS DESCRIPCIONES
+   - Recuerda lo que el cliente dijo antes (valla, sustrato, tipo de planta, etc.).
+   - Usa la DESCRIPCIÓN de cada producto para recomendar con precisión: no digas que algo es "sustrato" si la descripción dice que es un combo; no recomiendes un ciprés para "valla" si la descripción no indica uso en seto.
+   - Si piden "sustrato" o "sustratos", busca "sustrato" y revisa en los resultados cuáles son realmente sustratos (perlita, compost, mezclas) según la descripción.
+   - Conecta con el contexto: "Para tu valla te van bien estos setos porque [según descripción]..."
 
 5. CIERRA LA VENTA
-   - Resume lo que podría llevar
-   - Pregunta si quiere añadir algo más
-   - Ofrece ayuda para completar el pedido
+   - Después de listar productos, escribe SIEMPRE el cierre (razonamiento + impulso + invitar a seguir) como se indica en "DESPUÉS DE MOSTRAR PRODUCTOS".
+   - Resume lo que podría llevar; pregunta si quiere añadir algo más; ofrece ayuda para completar el pedido o para seguir hablando del tema (cuidados, variedades, dónde cultivar).
 
 ═══════════════════════════════════════════════
 EJEMPLOS DE BUENAS RESPUESTAS
@@ -189,17 +606,39 @@ Tú: "¡Buena elección! El Peral Conferencia es muy productivo y resistente.
 ¿Lo vas a plantar en tierra o en maceta? Si es maceta, necesitarás una de al menos 40-50L para que desarrolle bien las raíces.
 También te recomiendo un sustrato para frutales y, si quieres asegurar una buena cosecha, un abono específico para perales. ¿Te busco opciones?"
 
-EJEMPLO 2 - Mencionar tienda física:
+EJEMPLO 2 - Siempre texto antes del producto (OBLIGATORIO):
+Usuario: "tienes limonero eureka"
+Tú: [busca limonero eureka; hay 1 resultado]
+Tú: "Claro, tenemos Limonero Eureka en web.
+
+**LIMONERO EUREKA (4 estaciones)**
+![Limonero Eureka](/api/articulos/image/...)
+Precio: 25,50 € · Stock: 17 · Ref: 00022876
+[Ver producto](...)
+
+Es limonero de cuatro estaciones, muy productivo. ¿Lo quieres para maceta o para tierra? Si es maceta, te recomiendo también sustrato y abono para cítricos."
+
+EJEMPLO 3 - Mencionar tienda física:
 Usuario: "tienes manzanos?"
 Tú: "En la web ahora mismo tenemos el Manzano Golden a €15.90 (3 unidades).
 En nuestra tienda física en Totana hay más variedades: Fuji, Reineta, Granny Smith... Si puedes acercarte, tienes más donde elegir.
 ¿Cuál te interesa más?"
 
-EJEMPLO 3 - Mantener contexto:
+EJEMPLO 4 - Mantener contexto:
 Usuario: "quiero algo resistente al frío"
 Tú: [busca plantas resistentes al frío]
 Usuario: "vale, ¿y frutales?"
 Tú: "Para frutales resistentes al frío te van perfecto los perales, manzanos y cerezos. Son de los que mejor aguantan temperaturas bajas. ¿Tienes preferencia por alguno?"
+
+EJEMPLO 5 - Datos solo de la descripción (NUNCA inventar):
+Usuario: "a qué altura crece el ciprés común"
+Tú: [busca ciprés común; la descripción dice "puede alcanzar 30 m de talla", "porte columnar o piramidal", "setos o cortavientos"]
+Tú: "El ciprés común (Cupressus sempervirens) puede alcanzar unos 30 m de talla, con porte columnar o piramidal. Se utiliza formando setos o como cortavientos. [Si la descripción incluye riego o plantación, añádelo.] ¿Quieres que te busque cipreses disponibles o complementos?"
+
+EJEMPLO 6 - Explicar qué es cada producto al mostrarlo:
+Usuario: "dime un fungicida"
+Tú: [busca fungicida; un resultado es "ENFERMEDADES RO..." y la descripción dice que es para enfermedades de rosales]
+Tú: "Aquí tienes un fungicida que tenemos disponible: es específico para **enfermedades de rosales**. [Luego la card con nombre, imagen, precio, Ver producto.] Si buscas fungicida para otra planta (tomate, frutales, etc.), dímelo y te busco."
 
 ═══════════════════════════════════════════════
 
@@ -278,64 +717,8 @@ Datos de contacto:
 - Dirección: Ctra. Mazarrón km 2,4, Totana, Murcia`;
 
 // ============================================
-// BÚSQUEDA Y FORMATO
+// BÚSQUEDA – API Artículos (tiempo real)
 // ============================================
-
-async function searchProducts(query, webOnly = false) {
-  if (!pineconeIndex) return [];
-  
-  try {
-    console.log(`  🔍 "${query}"${webOnly ? ' (web)' : ''}`);
-    
-    const embedding = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
-      input: query,
-      dimensions: 512
-    });
-    
-    let filter = { $or: [{ stock_web: { $gt: 0 } }, { stock_fisico: { $gt: 0 } }] };
-    if (webOnly) filter = { stock_web: { $gt: 0 } };
-    
-    const results = await pineconeIndex.query({
-      vector: embedding.data[0].embedding,
-      topK: 15,
-      includeMetadata: true,
-      filter
-    });
-    
-    const products = results.matches?.map(m => m.metadata) || [];
-    const web = products.filter(p => p.stock_web > 0).length;
-    const store = products.filter(p => p.stock_fisico > 0 && !p.stock_web).length;
-    console.log(`     → ${web} web, ${store} tienda`);
-    
-    return products;
-  } catch (e) {
-    console.error('❌', e.message);
-    return [];
-  }
-}
-
-function formatProduct(p) {
-  let nombre = p.descripcion_bandeja;
-  if (!nombre || nombre === 'N/A') nombre = p.denominacion_web;
-  if (!nombre || nombre === 'N/A') nombre = p.denominacion_familia;
-  
-  const precio = p.precio_de_venta_bandeja || p.precio_web || p.precio_fisico || 0;
-  const stockWeb = p.stock_web || 0;
-  const stockFisico = p.stock_fisico || 0;
-  
-  let dispo = stockWeb > 0 
-    ? `${stockWeb} en WEB` 
-    : `${stockFisico} en TIENDA FÍSICA`;
-  
-  let info = `${nombre} | Cód: ${p.codigo_referencia} | €${precio.toFixed(2)} | ${dispo}`;
-  
-  if (p.descripcion_de_cada_articulo && p.descripcion_de_cada_articulo !== 'N/A') {
-    info += ` | ${p.descripcion_de_cada_articulo.substring(0, 120)}`;
-  }
-  
-  return info;
-}
 
 // ============================================
 // HERRAMIENTAS PARA LA IA
@@ -372,6 +755,54 @@ const tools = [
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Proxy de imagen PrestaShop: primero solo ws_key; si 403, reintentar con Basic Auth (como en otro proyecto)
+async function proxyProductImage(req, res) {
+  if (!usePrestaShopDirect) return res.status(404).end();
+  const { productId, imageId } = req.params;
+  const url = `${ARTICULOS_API_URL}/images/products/${productId}/${imageId}?${prestaShopQueryImage()}`;
+  try {
+    let r = await fetch(url, { headers: {} });
+    if (r.status === 403) {
+      r = await fetch(url, { headers: prestaShopAuth() });
+    }
+    if (!r.ok) {
+      console.warn(`PrestaShop image ${productId}/${imageId}: ${r.status}`);
+      return res.status(r.status).end();
+    }
+    const contentType = r.headers.get('content-type') || 'image/jpeg';
+    res.setHeader('content-type', contentType);
+    res.setHeader('cache-control', 'public, max-age=3600');
+    const buf = await r.arrayBuffer();
+    res.send(Buffer.from(buf));
+  } catch (e) {
+    console.warn('Proxy image error:', e.message);
+    res.status(502).end();
+  }
+}
+
+app.get('/api/chat/image/:productId/:imageId', proxyProductImage);
+app.get('/api/articulos/image/:productId/:imageId', proxyProductImage);
+
+// Listado de productos para página de prueba de imágenes (mismo formato que el otro proyecto)
+app.get('/api/articulos/products', async (req, res) => {
+  if (!usePrestaShopDirect) return res.json([]);
+  try {
+    await ensureProductsCache();
+    const list = productsCache.slice(0, 50).map((p) => ({
+      id: p.id,
+      imageId: p.imageId || null,
+      reference: p.reference || '',
+      denominacion: p.name || '',
+      linkProducto: p.product_url || '',
+      precioFinal: p.price_tax_incl != null ? p.price_tax_incl : p.price,
+      stock: p.stock != null ? String(p.stock) : '—'
+    }));
+    res.json(list);
+  } catch (e) {
+    res.status(500).json([]);
+  }
+});
 
 // Cache en memoria para sesiones activas (reduce lecturas a Firestore)
 const memoryCache = new Map();
@@ -427,7 +858,8 @@ app.get('/api/chat/history', async (req, res) => {
       const messages = conv.messages.map(m => ({
         role: m.role,
         content: m.content,
-        timestamp: m.timestamp || null
+        timestamp: m.timestamp || null,
+        products: m.products || null
       }));
       
       res.json({ 
@@ -445,6 +877,7 @@ app.get('/api/chat/history', async (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
+  console.log('📩 POST /api/chat');
   try {
     const { message, deviceId } = req.body;
     if (!message) return res.status(400).json({ error: 'Mensaje requerido' });
@@ -461,7 +894,8 @@ app.post('/api/chat', async (req, res) => {
       timestamp: new Date().toISOString() 
     });
     
-    console.log(`\n👤 [${safeDeviceId.slice(0, 12)}...] "${message}"`);
+    console.log('\n' + '─'.repeat(60));
+    console.log(`👤 USUARIO [${safeDeviceId.slice(0, 12)}...] "${message}"`);
     
     // Llamada inicial
     let response = await openai.chat.completions.create({
@@ -478,22 +912,47 @@ app.post('/api/chat', async (req, res) => {
     
     let assistantMessage = response.choices[0].message;
     let searchCount = 0;
+    let lastSearchProducts = [];
     
     // Loop de búsquedas
     while (assistantMessage.tool_calls && searchCount < 6) {
-      console.log(`🔧 ${assistantMessage.tool_calls.length} búsqueda(s)`);
+      console.log('\n🔧 BÚSQUEDAS DE ARTÍCULOS:');
       
       const toolResults = [];
       
       for (const call of assistantMessage.tool_calls) {
         if (call.function.name === 'buscar_productos') {
           const args = JSON.parse(call.function.arguments);
-          const products = await searchProducts(args.termino, args.solo_web || false);
+          const termino = (args.termino || '').trim();
+          const soloWeb = !!args.solo_web;
+          console.log(`  📌 buscar_productos( termino="${termino}", solo_web=${soloWeb} )`);
+          
+          const products = await searchProductsFromAPI(args.termino, args.solo_web || false);
+          lastSearchProducts = lastSearchProducts.concat(products);
+          
+          if (products.length === 0) {
+            console.log(`  ❌ Encontrados: 0`);
+          } else {
+            console.log(`  ✅ Encontrados: ${products.length} producto(s):`);
+            products.forEach((p) => {
+              const name = (p.name || 'Sin nombre').slice(0, 50);
+              const ref = p.reference || '—';
+              const price = formatPrice(p.price_tax_incl) || formatPrice(p.price) || '—';
+              const stock = p.stock != null ? String(p.stock) : '—';
+              console.log(`    • ${name} | Ref: ${ref} | ${price} | Stock: ${stock}`);
+              const desc = (p.description || '').trim();
+              if (desc) {
+                const preview = desc.slice(0, 120) + (desc.length > 120 ? '…' : '');
+                console.log(`      Descripción: "${preview}"`);
+              } else {
+                console.log(`      Descripción: (sin descripción)`);
+              }
+            });
+          }
           
           const formatted = products.length > 0
-            ? products.slice(0, 8).map(formatProduct).join('\n')
+            ? products.map(formatProductForTool).join('\n')
             : 'No encontrado. Intenta con otro término.';
-          
           toolResults.push({
             tool_call_id: call.id,
             role: 'tool',
@@ -502,6 +961,8 @@ app.post('/api/chat', async (req, res) => {
           searchCount++;
         }
       }
+      
+      if (toolResults.length > 0) console.log('  → Resultados enviados a la IA.');
       
       response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -520,11 +981,27 @@ app.post('/api/chat', async (req, res) => {
       assistantMessage = response.choices[0].message;
     }
     
-    const reply = assistantMessage.content || 'No pude procesar tu consulta. ¿Puedes reformularla?';
+    let reply = assistantMessage.content || 'No pude procesar tu consulta. ¿Puedes reformularla?';
+    // Fallback: si hay productos y la respuesta empieza directamente con el producto (sin texto intro), anteponer una frase para que el usuario vea siempre texto antes de la card
+    if (lastSearchProducts.length > 0 && /^\s*\*\*[^*]+\*\*/.test(reply.trim())) {
+      reply = 'Claro, aquí tienes:\n\n' + reply;
+    }
+    const savedProducts = lastSearchProducts.length > 0
+      ? lastSearchProducts.map((p) => ({
+          id: p.id,
+          imageId: p.imageId || null,
+          name: p.name || '',
+          price: formatPrice(p.price_tax_incl) || formatPrice(p.price) || 'Consultar',
+          stock: p.stock != null ? String(p.stock) : 'Consultar',
+          reference: p.reference || '',
+          product_url: p.product_url || 'https://plantasdehuerto.com/'
+        }))
+      : null;
     conv.messages.push({ 
       role: 'assistant', 
       content: reply, 
-      timestamp: new Date().toISOString() 
+      timestamp: new Date().toISOString(),
+      products: savedProducts
     });
     
     // Guardar en Firestore (async, no bloquea respuesta)
@@ -532,12 +1009,29 @@ app.post('/api/chat', async (req, res) => {
       console.error('❌ Save async:', e.message)
     );
     
-    console.log(`💬 OK (${searchCount} búsquedas)\n`);
+    console.log('\n💬 RESPUESTA');
+    if (searchCount === 0) console.log('   (sin búsquedas)');
+    console.log(`   Búsquedas: ${searchCount} | Respuesta: ${reply.length} caracteres`);
+    const withImage = lastSearchProducts.filter((p) => p.imageId || p.image_url).length;
+    if (lastSearchProducts.length > 0) console.log(`   Imagen: ${withImage} productos con imageId enviados al cliente (misma URL que test-imagenes)`);
+    console.log('─'.repeat(60) + '\n');
 
-    res.json({ message: reply, deviceId: safeDeviceId });
+    const payload = { message: reply, deviceId: safeDeviceId };
+    if (lastSearchProducts.length > 0) {
+      payload.products = lastSearchProducts.map((p) => ({
+        id: p.id,
+        imageId: p.imageId || null,
+        name: p.name || '',
+        price: formatPrice(p.price_tax_incl) || formatPrice(p.price) || 'Consultar',
+        stock: p.stock != null ? String(p.stock) : 'Consultar',
+        reference: p.reference || '',
+        product_url: p.product_url || 'https://plantasdehuerto.com/'
+      }));
+    }
+    res.json(payload);
 
   } catch (error) {
-    console.error('❌', error.message);
+    console.error('❌ /api/chat:', error.message);
     res.status(500).json({ error: 'Error procesando mensaje' });
   }
 });
@@ -555,7 +1049,7 @@ app.post('/api/chat/clear', async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    pinecone: pineconeIndex ? 'ok' : 'no',
+    articulos: usePrestaShopDirect ? (productsCache.length ? `${productsCache.length} en cache` : 'sin cache') : 'no',
     firebase: db ? 'ok' : 'no'
   });
 });

@@ -243,6 +243,103 @@ html, body {
   font-weight: 600;
 }
 
+/* Imágenes de producto en el chat (igual que test-imagenes) */
+.message-bubble .chat-product-img {
+  max-width: 120px;
+  height: auto;
+  max-height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+  margin: 6px 0;
+}
+
+/* Card de producto: imagen | borde | denominación (15 chars) | stock | ref | precio | borde | ver producto */
+.message-text .product-card {
+  width: 100%;
+  max-width: 200px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 10px 0;
+  font-family: inherit;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.message-text .product-card-image {
+  width: 100%;
+  height: 100px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.message-text .product-card-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.message-text .product-card-border {
+  height: 0;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+.message-text .product-card-body {
+  padding: 10px 12px;
+}
+
+.message-text .product-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+  line-height: 1.3;
+}
+
+.message-text .product-card-row {
+  font-size: 12px;
+  color: var(--text-light);
+  margin-bottom: 5px;
+  line-height: 1.4;
+}
+
+.message-text .product-card-row:last-of-type {
+  margin-bottom: 8px;
+}
+
+.message-text .product-card-link {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary);
+  text-decoration: none;
+  text-align: center;
+  padding-top: 8px;
+  transition: color 0.2s ease;
+}
+
+.message-text .product-card-link:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+/* Quitar numeración 1. 2. cuando hay cards de producto en la lista */
+.message-text ol:has(.product-card) {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+.message-text ol:has(.product-card) li {
+  list-style: none;
+  margin-bottom: 4px;
+}
+.message-text ol:has(.product-card) li::marker {
+  content: none;
+}
+
 .message-text em {
   font-style: italic;
 }
@@ -319,6 +416,8 @@ html, body {
 .message-text a {
   color: var(--primary);
   text-decoration: none;
+  pointer-events: auto !important;
+  cursor: pointer !important;
 }
 
 .message-text a:hover {
@@ -587,19 +686,16 @@ html, body {
 /* Responsive móvil - Android / iOS */
 @media (max-width: 400px) {
   html, body {
+    height: 100vh;
     height: 100dvh;
-    min-height: 100dvh;
+    max-height: 100vh;
     max-height: 100dvh;
     overflow: hidden;
   }
 
   .chatbot-container {
-    bottom: 0;
-    right: 0;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
+    bottom: 16px;
+    right: 16px;
   }
 
   .chatbot-toggle {
@@ -608,34 +704,37 @@ html, body {
   }
 
   .chatbot-window {
-    top: 0;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    max-height: 100dvh;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    /* Altura visible real en móvil (evita que el input quede fuera) */
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-height: 100vh !important;
+    max-height: 100dvh !important;
     border-radius: 0;
     border: none;
     box-sizing: border-box;
-    overflow: hidden;
-    touch-action: pan-y;
-  }
-
-  .chatbot-messages {
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
-    touch-action: pan-y;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
   }
 
   .chatbot-header {
+    flex-shrink: 0 !important;
     padding-top: max(16px, env(safe-area-inset-top, 0));
-    flex-shrink: 0;
+  }
+
+  .chatbot-messages {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
   }
 
   .chatbot-input-container {
-    flex-shrink: 0;
+    flex-shrink: 0 !important;
     padding-bottom: max(16px, env(safe-area-inset-bottom, 0));
     padding-left: max(20px, env(safe-area-inset-left, 0));
     padding-right: max(20px, env(safe-area-inset-right, 0));
