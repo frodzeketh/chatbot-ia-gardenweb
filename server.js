@@ -761,6 +761,12 @@ const tools = [
 // ============================================
 
 app.use(cors());
+// Permitir que el widget (widget.html, iframe) se incruste en cualquier página, p. ej. PrestaShop
+app.use(function(req, res, next) {
+  res.setHeader('Content-Security-Policy', "frame-ancestors *");
+  res.removeHeader('X-Frame-Options');
+  next();
+});
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
