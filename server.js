@@ -938,6 +938,17 @@ app.post('/api/chat', async (req, res) => {
     console.log('\n' + '─'.repeat(60));
     console.log(`👤 USUARIO [${safeDeviceId.slice(0, 12)}...] "${message}"`);
     
+    // Acumular uso de tokens para coste por consulta
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
+    function accumulateUsage(res) {
+      const u = res?.usage;
+      if (u) {
+        totalPromptTokens += u.prompt_tokens || 0;
+        totalCompletionTokens += u.completion_tokens || 0;
+      }
+    }
+    
     // Llamada inicial
     let response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -951,9 +962,30 @@ app.post('/api/chat', async (req, res) => {
       temperature: 0.75
     });
     
+    accumulateUsage(response);
     let assistantMessage = response.choices[0].message;
     let searchCount = 0;
     let lastSearchProducts = [];
+    
+    // Log 1ª respuesta: ¿la IA llamó a herramientas o solo respondió con texto?
+    if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+      const calls = assistantMessage.tool_calls.filter((c) => c.function?.name === 'buscar_productos');
+      if (calls.length > 0) {
+        calls.forEach((c) => {
+          try {
+            const args = JSON.parse(c.function.arguments || '{}');
+            console.log(`🤖 IA (1ª respuesta): → tool_calls → buscar_productos( termino="${(args.termino || '').trim()}" )`);
+          } catch (_) {
+            console.log(`🤖 IA (1ª respuesta): → tool_calls → buscar_productos`);
+          }
+        });
+      } else {
+        console.log(`🤖 IA (1ª respuesta): → tool_calls (otras): ${(assistantMessage.tool_calls.map((c) => c.function?.name)).join(', ')}`);
+      }
+    } else {
+      const preview = (assistantMessage.content || '').slice(0, 100).replace(/\n/g, ' ');
+      console.log(`🤖 IA (1ª respuesta): → content_only (no llamó a herramientas). Preview: "${preview}${(assistantMessage.content || '').length > 100 ? '…' : ''}"`);
+    }
     
     // Loop de búsquedas
     while (assistantMessage.tool_calls && searchCount < 6) {
@@ -1019,7 +1051,21 @@ app.post('/api/chat', async (req, res) => {
         temperature: 0.75
       });
       
+      accumulateUsage(response);
       assistantMessage = response.choices[0].message;
+      
+      // Log si la IA pide más búsquedas o ya responde con texto
+      if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+        const calls = assistantMessage.tool_calls.filter((c) => c.function?.name === 'buscar_productos');
+        calls.forEach((c) => {
+          try {
+            const args = JSON.parse(c.function.arguments || '{}');
+            console.log(`  📌 (vuelta) buscar_productos( termino="${(args.termino || '').trim()}" )`);
+          } catch (_) {}
+        });
+      } else {
+        console.log(`  → IA respondió con texto (sin más tool_calls).`);
+      }
     }
     
     let reply = assistantMessage.content || 'No pude procesar tu consulta. ¿Puedes reformularla?';
@@ -1050,11 +1096,19 @@ app.post('/api/chat', async (req, res) => {
       console.error('❌ Save async:', e.message)
     );
     
+    // Coste aprox. GPT-4o-mini (precios por 1M tokens: input ~0.15 USD, output ~0.60 USD)
+    const PRICE_INPUT_PER_1M = 0.15;
+    const PRICE_OUTPUT_PER_1M = 0.60;
+    const costUsd = (totalPromptTokens / 1e6) * PRICE_INPUT_PER_1M + (totalCompletionTokens / 1e6) * PRICE_OUTPUT_PER_1M;
+    const costEur = costUsd * 0.92; // aprox. EUR
+
     console.log('\n💬 RESPUESTA');
     if (searchCount === 0) console.log('   (sin búsquedas)');
     console.log(`   Búsquedas: ${searchCount} | Respuesta: ${reply.length} caracteres`);
     const withImage = lastSearchProducts.filter((p) => p.imageId || p.image_url).length;
     if (lastSearchProducts.length > 0) console.log(`   Imagen: ${withImage} productos con imageId enviados al cliente (misma URL que test-imagenes)`);
+    console.log(`📊 Uso: ${totalPromptTokens} prompt_tokens, ${totalCompletionTokens} completion_tokens, ${totalPromptTokens + totalCompletionTokens} total`);
+    console.log(`💰 Coste aprox. por consulta: $${costUsd.toFixed(4)} (≈ €${costEur.toFixed(4)})`);
     console.log('─'.repeat(60) + '\n');
 
     const payload = { message: reply, deviceId: safeDeviceId };
