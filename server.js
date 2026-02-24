@@ -378,7 +378,7 @@ function parsePrestaShopProductImages(data) {
   return map;
 }
 
-const FETCH_TIMEOUT_MS = 15000;
+const FETCH_TIMEOUT_MS = 55000;
 
 function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const ctrl = new AbortController();
