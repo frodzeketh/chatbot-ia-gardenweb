@@ -158,16 +158,23 @@
 
     function hideChat() {
       chatOpen = false;
+      const scrollToRestore = savedScrollY;
       document.documentElement.style.overflow = '';
       document.body.style.overflow = '';
       document.body.style.position = '';
       document.body.style.left = '';
       document.body.style.right = '';
       document.body.style.top = '';
-      window.scrollTo(0, savedScrollY);
       iframe.style.display = 'none';
       if (!buttonHidden) toggleBtn.style.display = 'flex';
       iframe.contentWindow && iframe.contentWindow.postMessage({ type: 'chatbot-close' }, '*');
+      // Restaurar scroll después del reflow para que la página no salte al cerrar
+      requestAnimationFrame(function() {
+        window.scrollTo(0, scrollToRestore);
+        requestAnimationFrame(function() {
+          window.scrollTo(0, scrollToRestore);
+        });
+      });
     }
 
     function onToggleClick() {
