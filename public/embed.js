@@ -141,16 +141,20 @@
     let startX, startY, initialX, initialY;
     let buttonHidden = false;
 
-    let savedScrollY = 0;
+    // Ancho de la barra de desplazamiento (para compensar al ocultarla y que la web no se mueva)
+    function getScrollbarWidth() {
+      return window.innerWidth - document.documentElement.clientWidth;
+    }
+
     function showChat() {
       chatOpen = true;
-      savedScrollY = window.scrollY || window.pageYOffset;
+      var scrollbarW = getScrollbarWidth();
       document.documentElement.style.overflow = 'hidden';
       document.body.style.overflow = 'hidden';
-      document.body.style.position = 'fixed';
-      document.body.style.left = '0';
-      document.body.style.right = '0';
-      document.body.style.top = -savedScrollY + 'px';
+      if (scrollbarW > 0) {
+        document.documentElement.style.paddingRight = scrollbarW + 'px';
+        document.body.style.paddingRight = scrollbarW + 'px';
+      }
       iframe.style.display = 'block';
       toggleBtn.style.display = 'none';
       iframe.contentWindow && iframe.contentWindow.postMessage({ type: 'chatbot-open' }, '*');
@@ -158,23 +162,13 @@
 
     function hideChat() {
       chatOpen = false;
-      const scrollToRestore = savedScrollY;
       document.documentElement.style.overflow = '';
       document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.left = '';
-      document.body.style.right = '';
-      document.body.style.top = '';
+      document.documentElement.style.paddingRight = '';
+      document.body.style.paddingRight = '';
       iframe.style.display = 'none';
       if (!buttonHidden) toggleBtn.style.display = 'flex';
       iframe.contentWindow && iframe.contentWindow.postMessage({ type: 'chatbot-close' }, '*');
-      // Restaurar scroll después del reflow para que la página no salte al cerrar
-      requestAnimationFrame(function() {
-        window.scrollTo(0, scrollToRestore);
-        requestAnimationFrame(function() {
-          window.scrollTo(0, scrollToRestore);
-        });
-      });
     }
 
     function onToggleClick() {
