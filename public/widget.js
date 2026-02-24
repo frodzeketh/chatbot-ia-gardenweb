@@ -21,9 +21,14 @@
   const form = document.getElementById('chatbot-form');
   const input = document.getElementById('chatbot-input');
   const sendBtn = document.getElementById('chatbot-send');
+  const attachBtn = document.getElementById('chatbot-attach');
+  const imageInput = document.getElementById('chatbot-image-input');
+  const imagePreview = document.getElementById('chatbot-image-preview');
   const botNameEl = document.getElementById('bot-name');
   const welcomeTimeEl = document.getElementById('welcome-time');
   const suggestionsEl = document.getElementById('suggestions');
+
+  let pendingImage = null;
 
   // Escuchar mensajes del padre (iframe)
   window.addEventListener('message', function(event) {
@@ -72,7 +77,11 @@
     closeBtn.addEventListener('click', closeChat);
     form.addEventListener('submit', handleSubmit);
     input.addEventListener('input', handleInputChange);
-    
+    if (attachBtn && imageInput) {
+      attachBtn.addEventListener('click', () => imageInput.click());
+      imageInput.addEventListener('change', handleImageSelect);
+    }
+
     // Hacer el botón arrastrable
     initDraggable();
 
@@ -125,7 +134,7 @@
         // Añadir cada mensaje del historial
         data.messages.forEach(msg => {
           const type = msg.role === 'user' ? 'user' : 'bot';
-          addHistoryMessage(msg.content, type, msg.timestamp, msg.products);
+          addHistoryMessage(msg.content, type, msg.timestamp, msg.products, msg.imageUrl);
         });
         
         // Scroll al final
@@ -136,8 +145,8 @@
     }
   }
   
-  // Añadir mensaje del historial (con timestamp y products para reconstruir cards con imagen)
-  function addHistoryMessage(text, type, timestamp, products) {
+  // Añadir mensaje del historial (con timestamp, products e imageUrl para fotos del usuario)
+  function addHistoryMessage(text, type, timestamp, products, imageUrl) {
     const div = document.createElement('div');
     div.className = `message ${type}-message`;
     
@@ -153,9 +162,11 @@
     if (type === 'bot' && products && products.length > 0) {
       content = injectProductImagesIntoHtml(content, products);
     }
+    const imageBlock = (type === 'user' && imageUrl) ? '<div class="message-user-image"><img src="' + (imageUrl || '').replace(/"/g, '&quot;') + '" alt="Foto enviada"></div>' : '';
     
     div.innerHTML = `
       <div class="message-bubble">
+        ${imageBlock}
         <div class="message-text">${content}</div>
         <span class="message-time">${time}</span>
       </div>
@@ -247,27 +258,57 @@
     // Opcional: cambiar estilo del botón según input
   }
 
+  function handleImageSelect(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    clearPendingImage();
+    const reader = new FileReader();
+    reader.onload = function() {
+      pendingImage = reader.result;
+      if (imagePreview) {
+        imagePreview.innerHTML = '<div class="chatbot-image-preview-inner"><img src="' + pendingImage.replace(/"/g, '&quot;') + '" alt="Vista previa (máx. 1 imagen)"><button type="button" class="chatbot-image-preview-remove" aria-label="Quitar imagen">&times;</button></div>';
+        imagePreview.classList.add('visible');
+        imagePreview.querySelector('.chatbot-image-preview-remove').addEventListener('click', clearPendingImage);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  }
+
+  function clearPendingImage() {
+    pendingImage = null;
+    if (imagePreview) {
+      imagePreview.innerHTML = '';
+      imagePreview.classList.remove('visible');
+    }
+    if (imageInput) imageInput.value = '';
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     
     const message = input.value.trim();
-    if (!message) return;
+    if (!message && !pendingImage) return;
 
     // Ocultar sugerencias
     if (suggestionsEl) suggestionsEl.classList.add('hidden');
 
-    // Agregar mensaje del usuario
-    addMessage(message, 'user');
+    const textToShow = message || '📷 [Foto adjunta]';
+    addMessage(textToShow, 'user', null, pendingImage);
     input.value = '';
+    const imageToSend = pendingImage;
+    clearPendingImage();
 
     // Mostrar typing
     const typingEl = showTyping();
 
     try {
+      const body = { message: message || '¿Qué me recomiendas según la foto?', deviceId };
+      if (imageToSend) body.imageBase64 = imageToSend;
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, deviceId })
+        body: JSON.stringify(body)
       });
 
       const data = await response.json();
@@ -292,7 +333,7 @@
     input.focus();
   }
 
-  function addMessage(text, type, products) {
+  function addMessage(text, type, products, userImage) {
     const div = document.createElement('div');
     div.className = `message ${type}-message`;
     
@@ -301,9 +342,11 @@
     if (type === 'bot' && products && products.length > 0) {
       content = injectProductImagesIntoHtml(content, products);
     }
+    const imageBlock = (type === 'user' && userImage) ? '<div class="message-user-image"><img src="' + (userImage || '').replace(/"/g, '&quot;') + '" alt="Foto enviada"></div>' : '';
     
     div.innerHTML = `
       <div class="message-bubble">
+        ${imageBlock}
         <div class="message-text">${content}</div>
         <span class="message-time">${time}</span>
       </div>

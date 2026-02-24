@@ -60,7 +60,12 @@
 
       <!-- Input -->
       <div class="chatbot-input-container">
+        <div id="chatbot-image-preview" class="chatbot-image-preview" aria-hidden="true"></div>
         <form id="chatbot-form" class="chatbot-form">
+          <input type="file" id="chatbot-image-input" class="chatbot-image-input" accept="image/*" aria-label="Adjuntar imagen (máx. 1)" />
+          <button type="button" class="chatbot-attach" id="chatbot-attach" title="Adjuntar foto (planta, terreno, hoja...)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
           <input 
             type="text" 
             id="chatbot-input" 

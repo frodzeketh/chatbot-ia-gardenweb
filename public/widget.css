@@ -214,16 +214,19 @@ html, body {
   line-height: 1.5;
 }
 
+/* Burbuja del bot: gris suave (como antes) */
 .bot-message .message-bubble {
   background: var(--bg-message);
   color: var(--text);
   border-bottom-left-radius: 4px;
 }
 
+/* Burbuja del usuario: gris neutro elegante (sin verde) */
 .user-message .message-bubble {
-  background: var(--primary);
-  color: white;
+  background: #E8E8ED;
+  color: var(--text);
   border-bottom-right-radius: 4px;
+  border: 1px solid #E0E0E5;
 }
 
 .message-text {
@@ -580,6 +583,94 @@ html, body {
 .chatbot-send svg {
   width: 16px;
   height: 16px;
+}
+
+.chatbot-image-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chatbot-attach {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: var(--text-light);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+.chatbot-attach:hover {
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.chatbot-attach svg {
+  width: 20px;
+  height: 20px;
+}
+
+.chatbot-image-preview {
+  display: none;
+  padding: 0 0 6px;
+  margin: 0;
+  background: transparent !important;
+  border: none !important;
+}
+.chatbot-image-preview.visible {
+  display: block;
+}
+.chatbot-image-preview-inner {
+  position: relative;
+  display: inline-block;
+  background: transparent !important;
+  border: none !important;
+}
+.chatbot-image-preview-inner img {
+  max-width: 80px;
+  max-height: 60px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  background: transparent;
+  vertical-align: middle;
+}
+.chatbot-image-preview-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.message-user-image {
+  margin-bottom: 8px;
+}
+.message-user-image img {
+  max-width: 100%;
+  max-height: 200px;
+  width: auto;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  display: block;
 }
 
 /* Typing */

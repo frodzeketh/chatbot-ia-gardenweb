@@ -140,6 +140,55 @@ async function getConversationFromDB(deviceId) {
   }
 }
 
+/** Convierte mensajes de conversación al formato que acepta OpenAI (vision: user con imageUrl → content array). lastUserImageOverride: si la última imagen falló al subir, pasar aquí el data URL para esta petición. */
+function messagesToOpenAIFormat(messages, lastUserImageOverride) {
+  const lastIdx = messages.length - 1;
+  return messages.map((m, i) => {
+    if (m.role === 'user') {
+      const imageUrl = (i === lastIdx && lastUserImageOverride) ? lastUserImageOverride : m.imageUrl;
+      if (imageUrl) {
+        return {
+          role: 'user',
+          content: [
+            { type: 'text', text: m.content || '' },
+            { type: 'image_url', image_url: { url: imageUrl } }
+          ]
+        };
+      }
+    }
+    return { role: m.role, content: m.content };
+  });
+}
+
+/** Sube imagen (data URL base64) a Firebase Storage y devuelve URL pública o firmada. */
+async function uploadImageToStorage(deviceId, dataUrl) {
+  const bucketName = process.env.FIREBASE_STORAGE_BUCKET || (process.env.FIREBASE_PROJECT_ID && `${process.env.FIREBASE_PROJECT_ID}.appspot.com`);
+  if (!bucketName) throw new Error('FIREBASE_STORAGE_BUCKET o FIREBASE_PROJECT_ID no configurado');
+  const match = dataUrl.match(/^data:(image\/[a-z]+);base64,(.+)$/i);
+  if (!match) throw new Error('Formato de imagen no válido (esperado data:image/...;base64,...)');
+  const mime = match[1];
+  const base64 = match[2];
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  const buffer = Buffer.from(base64, 'base64');
+  const bucket = admin.storage().bucket(bucketName);
+  const path = `chat/${deviceId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+  const file = bucket.file(path);
+  await file.save(buffer, { metadata: { contentType: mime } });
+  try {
+    const expires = new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
+    const [url] = await file.getSignedUrl({ action: 'read', expires });
+    return url;
+  } catch (_) {
+    try {
+      await file.makePublic();
+      return `https://storage.googleapis.com/${bucket.name}/${encodeURIComponent(path).replace(/%2F/g, '/')}`;
+    } catch (e) {
+      console.warn('Storage makePublic falló:', e.message);
+      throw e;
+    }
+  }
+}
+
 async function saveConversationToDB(deviceId, messages) {
   if (!db) return;
   
@@ -497,6 +546,8 @@ if (usePrestaShopDirect) {
 const SYSTEM_PROMPT = `Eres vendedor experto de PlantasdeHuerto.com (vivero El Huerto Deitana, Totana, Murcia).
 Contacto: 968 422 335 | info@plantasdehuerto.com
 
+Puedes recibir FOTOS del cliente (planta, terreno, hoja seca, etc.). Cuando adjunte una imagen, descríbela brevemente si ayuda y responde en función de lo que veas: recomienda sustrato, insecticida, diagnóstico (hoja seca, plagas), qué plantar en ese terreno, etc. Usa buscar_productos cuando convenga recomendar productos concretos (sustrato, abono, fungicida, insecticida).
+
 ═══════════════════════════════════════════════
 PRODUCTO ESTRELLA: CIPRES COMUN en Cepellon (Cupressus Sempervirens)
 ═══════════════════════════════════════════════
@@ -576,18 +627,17 @@ Precio: 24,50 € · Stock: 17 · Ref: 00022876
 ══════════════════════════════════════════════════════════════════
 DESPUÉS DE MOSTRAR PRODUCTOS: SIEMPRE ESCRIBE UN CIERRE (OBLIGATORIO)
 ══════════════════════════════════════════════════════════════════
-Cuando hayas mostrado uno o más productos (cards), NUNCA termines solo con la frase intro. SIEMPRE escribe un párrafo o dos DESPUÉS de los productos que incluya:
+Estructura de tu respuesta cuando muestres productos: [frase intro] + [productos/cards] + [párrafo de cierre]. NUNCA envíes solo intro + productos; el cliente debe leer siempre texto tuyo DESPUÉS de las cards (recomendación, siguiente paso o pregunta).
 
-1. RAZONAMIENTO BREVE: Por qué encajan con lo que pidió (usa la descripción: "La coliflor y la acelga son de desarrollo invernal...", "La lechuga romana aguanta bien el frío...").
-2. IMPULSO: Invita a elegir o a comprar ("Puedes llevarte cualquiera de estos para empezar", "Si te animas con la lechuga, tenemos stock").
-3. SEGUIR CONVERSANDO: Una de estas (o varias):
-   - Cómo cuidar lo que recomiendas (riego, marco, época de siembra).
-   - Otras cosas que podría cultivar (complementos: abono, sustrato, macetas).
-   - Preguntas abiertas: "¿Sabes si quieres cultivar en bancal o en maceta?", "¿Conoces los tipos de lechuga?", "¿Quieres que te cuente cómo plantar la coliflor?".
-   - Ofrecer más búsquedas: "Si buscas algo más concreto (por ejemplo solo bulbos o solo abonos de invierno), dímelo."
+Cuando hayas mostrado uno o más productos (cards), escribe SIEMPRE un párrafo o dos DESPUÉS de los productos:
+1. RAZONAMIENTO BREVE: Por qué encajan (usa la descripción).
+2. IMPULSO: Invita a elegir o comprar.
+3. SEGUIR CONVERSANDO: Cuidados, complementos (abono, sustrato), o pregunta abierta ("¿En bancal o maceta?", "¿Quieres que te cuente cómo plantarlas?", "¿Buscas también abono?").
 
-Ejemplo de cierre tras mostrar coliflores/lechugas/acelgas de invierno:
-"La coliflor, la acelga y la lechuga romana son clásicos de invierno: se desarrollan bien con frío y dan cosecha en esta época. Cualquiera de estos lotes te sirve para empezar. Si vas a plantar lechuga, ten en cuenta que la romana aguanta bien y puedes combinarla con otras verduras en el mismo bancal. ¿Quieres que te explique cómo cuidarlas o buscas también abono o sustrato para la temporada?"
+Si tienes que recortar algo, muestra menos productos (máx. 3); NUNCA omitas el párrafo de cierre después de los productos.
+
+Ejemplo de cierre tras mostrar lechugas/pimientos:
+"La lechuga romana y la escarola aguantan bien; los pimientos piden algo de calor. Cualquiera de estos te sirve para empezar. Si vas con lechugas, puedes combinarlas en el mismo bancal. ¿Quieres que te explique riego y marco, o buscas también sustrato o abono?"
 
 ═══════════════════════════════
 TU OBJETIVO: VENDER Y AYUDAR AL CLIENTE
@@ -895,12 +945,13 @@ app.get('/api/chat/history', async (req, res) => {
     const sessionDate = getSessionDate();
     
     if (conv && conv.messages) {
-      // Devolver mensajes formateados para el widget
+      // Devolver mensajes formateados para el widget (incl. imageUrl para fotos del usuario)
       const messages = conv.messages.map(m => ({
         role: m.role,
         content: m.content,
         timestamp: m.timestamp || null,
-        products: m.products || null
+        products: m.products || null,
+        imageUrl: m.imageUrl || null
       }));
       
       res.json({ 
@@ -920,7 +971,7 @@ app.get('/api/chat/history', async (req, res) => {
 app.post('/api/chat', async (req, res) => {
   console.log('📩 POST /api/chat');
   try {
-    const { message, deviceId } = req.body;
+    const { message, deviceId, imageBase64 } = req.body;
     if (!message) return res.status(400).json({ error: 'Mensaje requerido' });
     
     // Validar deviceId (debe empezar con 'dev_' y tener formato UUID-like)
@@ -928,15 +979,27 @@ app.post('/api/chat', async (req, res) => {
       ? deviceId 
       : 'anonymous';
 
+    let imageUrl = null;
+    if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image/')) {
+      try {
+        imageUrl = await uploadImageToStorage(safeDeviceId, imageBase64);
+        console.log('🖼️ Imagen subida a Storage:', imageUrl.slice(0, 60) + '…');
+      } catch (e) {
+        console.warn('⚠️ Error subiendo imagen:', e.message);
+      }
+    }
+    const imageForAPI = imageUrl || (imageBase64 && imageBase64.startsWith('data:image/') ? imageBase64 : null);
+
     const conv = await getConversation(safeDeviceId);
     conv.messages.push({ 
       role: 'user', 
       content: message, 
-      timestamp: new Date().toISOString() 
+      timestamp: new Date().toISOString(),
+      ...(imageUrl && { imageUrl })
     });
     
     console.log('\n' + '─'.repeat(60));
-    console.log(`👤 USUARIO [${safeDeviceId.slice(0, 12)}...] "${message}"`);
+    console.log(`👤 USUARIO [${safeDeviceId.slice(0, 12)}...] "${message}"${imageUrl ? ' + imagen' : ''}`);
     
     // Acumular uso de tokens para coste por consulta
     let totalPromptTokens = 0;
@@ -949,16 +1012,16 @@ app.post('/api/chat', async (req, res) => {
       }
     }
     
-    // Llamada inicial
+    // Llamada inicial (mensajes con imagen se envían en formato visión; si falló Storage, pasamos data URL solo para esta petición)
     let response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        ...conv.messages.slice(-15) // Más contexto
+        ...messagesToOpenAIFormat(conv.messages.slice(-15), imageForAPI)
       ],
       tools,
       tool_choice: 'auto',
-      max_tokens: 800,
+      max_tokens: 1200,
       temperature: 0.75
     });
     
@@ -1041,13 +1104,13 @@ app.post('/api/chat', async (req, res) => {
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          ...conv.messages.slice(-12),
+          ...messagesToOpenAIFormat(conv.messages.slice(-12), null),
           assistantMessage,
           ...toolResults
         ],
         tools,
         tool_choice: 'auto',
-        max_tokens: 800,
+        max_tokens: 1200,
         temperature: 0.75
       });
       
@@ -1112,6 +1175,7 @@ app.post('/api/chat', async (req, res) => {
     console.log('─'.repeat(60) + '\n');
 
     const payload = { message: reply, deviceId: safeDeviceId };
+    if (imageUrl) payload.userImageUrl = imageUrl;
     if (lastSearchProducts.length > 0) {
       payload.products = lastSearchProducts.map((p) => ({
         id: p.id,
