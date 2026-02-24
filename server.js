@@ -852,7 +852,7 @@ app.use(function(req, res, next) {
   res.removeHeader('X-Frame-Options');
   next();
 });
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Proxy de imagen PrestaShop: primero solo ws_key; si 403, reintentar con Basic Auth (como en otro proyecto)
