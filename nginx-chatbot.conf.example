@@ -1,0 +1,17 @@
+# Ejemplo de configuración nginx para evitar 504 en el chatbot
+# El endpoint /api/chat puede tardar 30-90s (OpenAI + posibles búsquedas).
+# Añade o ajusta en tu server {} o location /api/:
+
+location /api/ {
+    proxy_pass http://localhost:3000;   # o el upstream de tu app Node
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Evitar 504: el chat puede tardar hasta ~90s
+    proxy_connect_timeout 120s;
+    proxy_send_timeout 120s;
+    proxy_read_timeout 120s;
+}

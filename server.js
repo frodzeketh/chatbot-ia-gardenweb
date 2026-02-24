@@ -378,11 +378,19 @@ function parsePrestaShopProductImages(data) {
   return map;
 }
 
+const FETCH_TIMEOUT_MS = 15000;
+
+function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
 async function fetchProductImagesMap() {
   if (!usePrestaShopDirect) return {};
   try {
     const url = `${ARTICULOS_API_URL}/images/products?display=full&${prestaShopQuery()}`;
-    const res = await fetch(url, { headers: prestaShopAuth() });
+    const res = await fetchWithTimeout(url, { headers: prestaShopAuth() });
     if (!res.ok) return {};
     const data = await res.json();
     const map = parsePrestaShopProductImages(data);
@@ -417,8 +425,8 @@ async function fetchProductsFromPrestaShop() {
   if (!usePrestaShopDirect) return [];
   try {
     const [productsRes, stockRes, imageMap] = await Promise.all([
-      fetch(`${ARTICULOS_API_URL}/products?display=full&${prestaShopQuery()}`, { headers: prestaShopAuth() }),
-      fetch(`${ARTICULOS_API_URL}/stock_availables?display=full&${prestaShopQuery()}`, { headers: prestaShopAuth() }),
+      fetchWithTimeout(`${ARTICULOS_API_URL}/products?display=full&${prestaShopQuery()}`, { headers: prestaShopAuth() }),
+      fetchWithTimeout(`${ARTICULOS_API_URL}/stock_availables?display=full&${prestaShopQuery()}`, { headers: prestaShopAuth() }),
       fetchProductImagesMap()
     ]);
     if (!productsRes.ok) throw new Error('Products ' + productsRes.status);
@@ -968,11 +976,19 @@ app.get('/api/chat/history', async (req, res) => {
   }
 });
 
+const CHAT_TIMEOUT_MS = 95000; // Respuesta 503 si se supera. Nginx debe tener proxy_read_timeout >= 120s para /api/chat (ver nginx-chatbot.conf.example).
+
 app.post('/api/chat', async (req, res) => {
   console.log('📩 POST /api/chat');
-  try {
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('CHAT_TIMEOUT')), CHAT_TIMEOUT_MS)
+  );
+  const work = async () => {
     const { message, deviceId, imageBase64 } = req.body;
-    if (!message) return res.status(400).json({ error: 'Mensaje requerido' });
+    if (!message) {
+      res.status(400).json({ error: 'Mensaje requerido' });
+      return;
+    }
     
     // Validar deviceId (debe empezar con 'dev_' y tener formato UUID-like)
     const safeDeviceId = (deviceId && /^dev_[a-f0-9-]{36}$/.test(deviceId)) 
@@ -982,7 +998,12 @@ app.post('/api/chat', async (req, res) => {
     let imageUrl = null;
     if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image/')) {
       try {
-        imageUrl = await uploadImageToStorage(safeDeviceId, imageBase64);
+        const uploadPromise = uploadImageToStorage(safeDeviceId, imageBase64);
+        const timeoutMs = 20000;
+        imageUrl = await Promise.race([
+          uploadPromise,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('upload_timeout')), timeoutMs))
+        ]);
         console.log('🖼️ Imagen subida a Storage:', imageUrl.slice(0, 60) + '…');
       } catch (e) {
         console.warn('⚠️ Error subiendo imagen:', e.message);
@@ -1187,11 +1208,20 @@ app.post('/api/chat', async (req, res) => {
         product_url: p.product_url || 'https://plantasdehuerto.com/'
       }));
     }
+    if (res.headersSent) return;
     res.json(payload);
+  };
 
+  try {
+    await Promise.race([ work(), timeoutPromise ]);
   } catch (error) {
+    if (error.message === 'CHAT_TIMEOUT') {
+      console.warn('⚠️ /api/chat: timeout', CHAT_TIMEOUT_MS + 'ms');
+      if (!res.headersSent) res.status(503).json({ error: 'La solicitud tardó demasiado. Intenta de nuevo.' });
+      return;
+    }
     console.error('❌ /api/chat:', error.message);
-    res.status(500).json({ error: 'Error procesando mensaje' });
+    if (!res.headersSent) res.status(500).json({ error: 'Error procesando mensaje' });
   }
 });
 
