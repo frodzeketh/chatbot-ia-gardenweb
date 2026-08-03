@@ -2,8 +2,8 @@
 <module>
     <name>chatbotiagardenweb</name>
     <displayName><![CDATA[Chatbot IA Garden Web]]></displayName>
-    <version><![CDATA[1.0.2]]></version>
-    <description><![CDATA[Inyecta el script del chatbot IA sin bloquear la carga de la tienda.]]></description>
+    <version><![CDATA[1.0.3]]></version>
+    <description><![CDATA[Chatbot IA: carga diferida tras la pagina, sin afectar el tiempo de inicio.]]></description>
     <author><![CDATA[Huerto IA]]></author>
     <tab><![CDATA[front_office_features]]></tab>
     <confirmUninstall><![CDATA[Desinstalar el chatbot IA?]]></confirmUninstall>

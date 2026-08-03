@@ -85,6 +85,8 @@
     const img = document.createElement('img');
     img.src = baseUrl + '/logo-crop-huerto.png';
     img.alt = 'Chat';
+    img.loading = 'lazy';
+    img.decoding = 'async';
     img.style.cssText = 'width:100%!important;height:100%!important;object-fit:contain!important;pointer-events:none!important;';
     toggleBtn.appendChild(img);
 

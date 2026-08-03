@@ -8,14 +8,11 @@ class Chatbotiagardenweb extends Module
 {
     const EMBED_SCRIPT_URL = 'https://web-production-174f3.up.railway.app/embed.js';
 
-    /** Evita inyectar el script dos veces si varios hooks se ejecutan en la misma pagina. */
-    private static $scriptInjected = false;
-
     public function __construct()
     {
         $this->name = 'chatbotiagardenweb';
         $this->tab = 'front_office_features';
-        $this->version = '1.0.2';
+        $this->version = '1.0.3';
         $this->author = 'Huerto IA';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -23,15 +20,13 @@ class Chatbotiagardenweb extends Module
         parent::__construct();
 
         $this->displayName = $this->l('Chatbot IA Garden Web');
-        $this->description = $this->l('Inyecta el script del chatbot IA sin bloquear la carga de la tienda.');
+        $this->description = $this->l('Chatbot IA: carga diferida tras la pagina, sin afectar el tiempo de inicio.');
     }
 
     public function install()
     {
         return parent::install()
-            && $this->registerHook('displayBeforeBodyClosingTag')
-            && $this->registerHook('displayFooter')
-            && $this->registerHook('displayHeader');
+            && $this->registerHook('actionFrontControllerSetMedia');
     }
 
     public function uninstall()
@@ -40,34 +35,23 @@ class Chatbotiagardenweb extends Module
     }
 
     /**
-     * Varios hooks por compatibilidad con temas custom (algunos no llaman displayFooter).
-     * defer: no bloquea el parseo aunque el hook sea displayHeader.
+     * Registra un loader local (~400 B). embed.js de Railway solo se pide
+     * despues de window.load + idle, sin competir con la carga inicial.
      */
-    private function renderEmbedScript()
+    public function hookActionFrontControllerSetMedia($params)
     {
-        if (self::$scriptInjected) {
-            return '';
+        if (!isset($this->context->controller)) {
+            return;
         }
 
-        self::$scriptInjected = true;
-
-        $url = htmlspecialchars(self::EMBED_SCRIPT_URL, ENT_QUOTES, 'UTF-8');
-
-        return '<script defer src="' . $url . '" data-chatbot-embed="1"></script>';
-    }
-
-    public function hookDisplayBeforeBodyClosingTag($params)
-    {
-        return $this->renderEmbedScript();
-    }
-
-    public function hookDisplayFooter($params)
-    {
-        return $this->renderEmbedScript();
-    }
-
-    public function hookDisplayHeader($params)
-    {
-        return $this->renderEmbedScript();
+        $this->context->controller->registerJavascript(
+            'module-' . $this->name . '-loader',
+            'modules/' . $this->name . '/views/js/chatbot-loader.js',
+            [
+                'position' => 'bottom',
+                'priority' => 200,
+                'version' => $this->version,
+            ]
+        );
     }
 }
