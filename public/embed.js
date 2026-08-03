@@ -30,6 +30,8 @@
     theme: currentScript.getAttribute('data-theme') || 'light'
   };
 
+  let loadIframeFn = null;
+
   function createWidget() {
     const container = document.createElement('div');
     container.id = 'chatbot-widget-wrapper';
@@ -82,10 +84,34 @@
     img.style.cssText = 'width:100%!important;height:100%!important;object-fit:contain!important;pointer-events:none!important;';
     toggleBtn.appendChild(img);
 
-    // Iframe SOLO para la ventana del chat (desktop: 360x500; responsive: pantalla completa)
+    // Iframe SOLO para la ventana del chat — se carga al primer clic (no al cargar la página)
     const iframe = document.createElement('iframe');
     iframe.id = 'chatbot-widget-frame';
-    iframe.src = baseUrl + '/widget.html';
+    const widgetUrl = baseUrl + '/widget.html';
+    let iframeLoaded = false;
+    let iframeLoading = null;
+
+    function loadIframe() {
+      if (iframeLoaded) return Promise.resolve();
+      if (iframeLoading) return iframeLoading;
+      iframeLoading = new Promise(function(resolve) {
+        iframe.onload = function() {
+          iframeLoaded = true;
+          iframeLoading = null;
+          iframe.contentWindow.postMessage({
+            type: 'chatbot-config',
+            apiUrl: baseUrl,
+            config: Object.assign({}, options, { externalButton: true })
+          }, '*');
+          resolve();
+        };
+        iframe.src = widgetUrl;
+      });
+      return iframeLoading;
+    }
+
+    loadIframeFn = loadIframe;
+
     const MOBILE_BREAKPOINT = 480;
     function applyIframeResponsive() {
       const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
@@ -143,9 +169,11 @@
 
     function showChat() {
       chatOpen = true;
-      iframe.style.display = 'block';
-      toggleBtn.style.display = 'none';
-      iframe.contentWindow && iframe.contentWindow.postMessage({ type: 'chatbot-open' }, '*');
+      loadIframe().then(function() {
+        iframe.style.display = 'block';
+        toggleBtn.style.display = 'none';
+        iframe.contentWindow && iframe.contentWindow.postMessage({ type: 'chatbot-open' }, '*');
+      });
     }
 
     function hideChat() {
@@ -244,14 +272,6 @@
     document.addEventListener('touchend', dragEnd);
     toggleBtn.style.touchAction = 'none';
 
-    iframe.onload = function() {
-      iframe.contentWindow.postMessage({
-        type: 'chatbot-config',
-        apiUrl: baseUrl,
-        config: Object.assign({}, options, { externalButton: true })
-      }, '*');
-    };
-
     window.addEventListener('message', function(event) {
       if (!event.data) return;
       if (event.data.type === 'chatbot-state' && event.data.isOpen === false) {
@@ -265,21 +285,32 @@
     return iframe;
   }
 
+  function scheduleCreateWidget() {
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(createWidget, { timeout: 2000 });
+    } else {
+      setTimeout(createWidget, 1);
+    }
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() { createWidget(); });
+    document.addEventListener('DOMContentLoaded', scheduleCreateWidget);
   } else {
-    createWidget();
+    scheduleCreateWidget();
   }
 
   window.ChatbotWidget = {
     open: function() {
       const frame = document.getElementById('chatbot-widget-frame');
       const btn = document.getElementById('chatbot-embed-toggle');
-      if (frame && frame.contentWindow) {
+      if (!frame) return;
+      function doOpen() {
         frame.style.display = 'block';
         if (btn) btn.style.display = 'none';
-        frame.contentWindow.postMessage({ type: 'chatbot-open' }, '*');
+        frame.contentWindow && frame.contentWindow.postMessage({ type: 'chatbot-open' }, '*');
       }
+      if (loadIframeFn) loadIframeFn().then(doOpen);
+      else doOpen();
     },
     close: function() {
       const frame = document.getElementById('chatbot-widget-frame');
@@ -300,6 +331,7 @@
     destroy: function() {
       const wrapper = document.getElementById('chatbot-widget-wrapper');
       if (wrapper) wrapper.remove();
+      loadIframeFn = null;
       window.ChatbotWidgetLoaded = false;
     }
   };

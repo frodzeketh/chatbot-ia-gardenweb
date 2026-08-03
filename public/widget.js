@@ -9,6 +9,7 @@
   let deviceId = localStorage.getItem('chatbot_device_id') || generateDeviceId();
   let isOpen = false;
   let config = {};
+  let chatDataLoaded = false;
 
   // Persistir deviceId - identificador anónimo único por dispositivo
   localStorage.setItem('chatbot_device_id', deviceId);
@@ -60,18 +61,6 @@
       welcomeTimeEl.textContent = formatTime(new Date());
     }
 
-    // Cargar configuración del servidor
-    try {
-      const response = await fetch(`${API_BASE}/api/config`);
-      const serverConfig = await response.json();
-      applyConfig(serverConfig);
-    } catch (e) {
-      console.log('Usando configuración por defecto');
-    }
-
-    // Cargar historial de la sesión actual (para mantener conversación al recargar)
-    await loadChatHistory();
-
     // Event listeners
     toggleBtn.addEventListener('click', handleToggleClick);
     closeBtn.addEventListener('click', closeChat);
@@ -117,8 +106,25 @@
       });
     }
 
-    // Burbuja de atención
-    initAttentionBubble();
+    // Burbuja de atención (solo en modo standalone, no en embed con botón externo)
+    if (window.parent === window) {
+      initAttentionBubble();
+    }
+  }
+
+  async function ensureChatDataLoaded() {
+    if (chatDataLoaded) return;
+    chatDataLoaded = true;
+
+    try {
+      const response = await fetch(`${API_BASE}/api/config`);
+      const serverConfig = await response.json();
+      applyConfig(serverConfig);
+    } catch (e) {
+      console.log('Usando configuración por defecto');
+    }
+
+    await loadChatHistory();
   }
   
   // Cargar historial de conversación del día
@@ -229,13 +235,18 @@
     if (cfg.primaryColor) {
       document.documentElement.style.setProperty('--primary', cfg.primaryColor);
     }
+    if (cfg.externalButton) {
+      if (toggleBtn) toggleBtn.style.display = 'none';
+      if (attentionBubble) attentionBubble.style.display = 'none';
+    }
   }
 
   function toggleChat() {
     isOpen ? closeChat() : openChat();
   }
 
-  function openChat() {
+  async function openChat() {
+    await ensureChatDataLoaded();
     isOpen = true;
     container.classList.add('open');
     input.focus();
