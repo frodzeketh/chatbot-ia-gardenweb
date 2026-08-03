@@ -20,14 +20,18 @@
   if (window.ChatbotWidgetLoaded) return;
   window.ChatbotWidgetLoaded = true;
 
-  const currentScript = document.currentScript;
-  const scriptSrc = currentScript.src;
+  const currentScript = document.currentScript
+    || document.querySelector('script[data-chatbot-embed]')
+    || document.querySelector('script[src*="embed.js"]');
+  const scriptSrc = (currentScript && currentScript.src)
+    ? currentScript.src
+    : 'https://web-production-174f3.up.railway.app/embed.js';
   const baseUrl = scriptSrc.substring(0, scriptSrc.lastIndexOf('/'));
 
   const options = {
-    position: currentScript.getAttribute('data-position') || 'right',
-    primaryColor: currentScript.getAttribute('data-primary-color') || '#3D6B35',
-    theme: currentScript.getAttribute('data-theme') || 'light'
+    position: (currentScript && currentScript.getAttribute('data-position')) || 'right',
+    primaryColor: (currentScript && currentScript.getAttribute('data-primary-color')) || '#3D6B35',
+    theme: (currentScript && currentScript.getAttribute('data-theme')) || 'light'
   };
 
   let loadIframeFn = null;
@@ -286,10 +290,18 @@
   }
 
   function scheduleCreateWidget() {
+    function run() {
+      if (!document.body) {
+        setTimeout(run, 10);
+        return;
+      }
+      createWidget();
+    }
+
     if ('requestIdleCallback' in window) {
-      requestIdleCallback(createWidget, { timeout: 2000 });
+      requestIdleCallback(run, { timeout: 500 });
     } else {
-      setTimeout(createWidget, 1);
+      setTimeout(run, 1);
     }
   }
 
