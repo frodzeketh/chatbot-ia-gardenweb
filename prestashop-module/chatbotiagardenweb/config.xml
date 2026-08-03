@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<module>
+    <name>chatbotiagardenweb</name>
+    <displayName><![CDATA[Chatbot IA Garden Web]]></displayName>
+    <version><![CDATA[1.0.1]]></version>
+    <description><![CDATA[Inyecta el script del chatbot IA al final de la pagina, sin bloquear la carga.]]></description>
+    <author><![CDATA[Huerto IA]]></author>
+    <tab><![CDATA[front_office_features]]></tab>
+    <confirmUninstall><![CDATA[Desinstalar el chatbot IA?]]></confirmUninstall>
+    <is_configurable>0</is_configurable>
+    <need_instance>0</need_instance>
+    <limited_countries></limited_countries>
+</module>
